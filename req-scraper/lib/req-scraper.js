@@ -84,72 +84,88 @@ export class REQScraper {
   }
 
   async performSearch(companyName) {
-    const page = await this.context.newPage();
-    page.setDefaultTimeout(this.options.timeout);
+  const page = await this.context.newPage();
+  page.setDefaultTimeout(this.options.timeout);
+  
+  try {
+    // Nouvelle URL
+    await page.goto('https://www.registreentreprises.gouv.qc.ca/reqna/gr/gr03/gr03a71.rechercheregistre.mvc/gr03a71/recherchenomentreprise', {
+      waitUntil: 'networkidle',
+      timeout: this.options.timeout
+    });
     
-    try {
-      await page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx', {
-        waitUntil: 'networkidle',
-        timeout: this.options.timeout
-      });
+    // Attendre que la page charge
+    await page.waitForTimeout(2000);
+    
+    // Remplir le champ de recherche
+    await page.fill('input[type="text"]', companyName);
+    
+    // Cocher la case des conditions
+    await page.check('input[type="checkbox"]');
+    
+    // Cliquer sur Rechercher
+    await page.click('button:has-text("Rechercher"), input[value="Rechercher"]');
+    
+    // Attendre les résultats
+    await page.waitForSelector('button:has-text("Consulter")', { timeout: 10000 });
+    
+    // Cliquer sur le premier bouton Consulter
+    const consultButtons = await page.$$('button:has-text("Consulter")');
+    if (consultButtons.length > 0) {
+      await consultButtons[0].click();
       
-      await page.waitForSelector('#CPH_K1ZoneContenu1_Cadr_IdSectionRechSimple_IdSectionRechSimple_K1Fieldset2_ChampNomEntreprise_TitreTextBox', {
-        state: 'visible'
-      });
+      // Attendre la page de détails
+      await page.waitForSelector('text="Identification de l\'entreprise"', { timeout: 10000 });
       
-      // Fill search field
-      await page.fill('#CPH_K1ZoneContenu1_Cadr_IdSectionRechSimple_IdSectionRechSimple_K1Fieldset2_ChampNomEntreprise_TitreTextBox', companyName);
-      
-      // CHECK THE CHECKBOX FOR CONDITIONS
-      const checkbox = await page.$('input[type="checkbox"]');
-      if (checkbox) {
-        await checkbox.check();
-      }
-      
-      // Click search button
-      await page.click('#CPH_K1ZoneContenu1_Cadr_IdSectionRechSimple_IdSectionRechSimple_KRechercherButtonRechercher');
-      
-      await Promise.race([
-        page.waitForSelector('.k1-grille-ligne', { timeout: 10000 }),
-        page.waitForSelector('.k1-message-aucun-resultat', { timeout: 10000 })
-      ]);
-      
-      const noResults = await page.$('.k1-message-aucun-resultat');
-      if (noResults) {
-        this.options.logger.info(`No results found for: ${companyName}`);
-        return [];
-      }
-      
-      const results = await this.parseSearchResults(page);
-      
-      if (this.options.snapshot && results.length > 0) {
-        const html = await page.content();
-        await this.saveSnapshot(companyName, html);
-      }
-      
-      const detailedResults = [];
-      for (let i = 0; i < Math.min(3, results.length); i++) {
-        const detailed = await this.getDetailedInfo(page, results[i], i);
-        if (detailed) {
-          detailedResults.push(detailed);
+      // Extraire les données
+      const data = await page.evaluate(() => {
+        const result = {};
+        
+        // NEQ
+        const neqRow = document.querySelector('td:has-text("Numéro d\'entreprise du Québec")');
+        if (neqRow) {
+          result.NEQ = neqRow.nextElementSibling?.textContent?.trim();
         }
-      }
+        
+        // Nom
+        const nameRow = document.querySelector('td:has-text("Nom")');
+        if (nameRow) {
+          result.name_official = nameRow.nextElementSibling?.textContent?.trim();
+        }
+        
+        // Statut
+        const statusRow = document.querySelector('td:has-text("Statut")');
+        if (statusRow) {
+          result.status = statusRow.nextElementSibling?.textContent?.trim();
+        }
+        
+        // Forme juridique
+        const formRow = document.querySelector('td:has-text("Forme juridique")');
+        if (formRow) {
+          result.legal_form = formRow.nextElementSibling?.textContent?.trim();
+        }
+        
+        // Adresse
+        const addressRow = document.querySelector('td:has-text("Adresse") + td');
+        if (addressRow) {
+          result.head_office_address = addressRow.textContent?.trim();
+        }
+        
+        return result;
+      });
       
-      return detailedResults.length > 0 ? detailedResults : results;
-      
-    } catch (error) {
-      this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
-      
-      if (this.options.snapshot) {
-        const html = await page.content().catch(() => '');
-        await this.saveSnapshot(`error_${companyName}`, html);
-      }
-      
-      throw error;
-    } finally {
-      await page.close();
+      return [data];
     }
+    
+    return [];
+    
+  } catch (error) {
+    this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
+    throw error;
+  } finally {
+    await page.close();
   }
+}
 
   async parseSearchResults(page) {
     const results = await page.evaluate(() => {
@@ -352,4 +368,5 @@ export class REQScraper {
       this.context = null;
     }
   }
+
 }
