@@ -88,72 +88,44 @@ export class REQScraper {
   page.setDefaultTimeout(this.options.timeout);
   
   try {
-    // Nouvelle URL
-    await page.goto('https://www.registreentreprises.gouv.qc.ca/reqna/gr/gr03/gr03a71.rechercheregistre.mvc/gr03a71/recherchenomentreprise', {
+    await page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx', {
       waitUntil: 'networkidle',
-      timeout: this.options.timeout
+      timeout: 60000
     });
     
-    // Attendre que la page charge
-    await page.waitForTimeout(2000);
+    // IMPORTANT: Wait 20 seconds for page to fully load
+    await page.waitForTimeout(20000);
     
-    // Remplir le champ de recherche
-    await page.fill('input[type="text"]', companyName);
+    // Fill search field
+    const searchInput = await page.$('input[type="text"]');
+    if (!searchInput) {
+      throw new Error('Search input not found');
+    }
+    await searchInput.fill(companyName);
     
-    // Cocher la case des conditions
-    await page.check('input[type="checkbox"]');
+    // Check the checkbox
+    const checkbox = await page.$('input[type="checkbox"]');
+    if (checkbox) {
+      await checkbox.check();
+    }
     
-    // Cliquer sur Rechercher
-    await page.click('button:has-text("Rechercher"), input[value="Rechercher"]');
+    // Click search button
+    const searchButton = await page.$('input[value="Rechercher"]');
+    if (searchButton) {
+      await searchButton.click();
+    }
     
-    // Attendre les résultats
-    await page.waitForSelector('button:has-text("Consulter")', { timeout: 10000 });
+    // Wait for results
+    await page.waitForTimeout(10000);
     
-    // Cliquer sur le premier bouton Consulter
+    // Click first Consulter button
     const consultButtons = await page.$$('button:has-text("Consulter")');
     if (consultButtons.length > 0) {
       await consultButtons[0].click();
+      await page.waitForTimeout(5000);
       
-      // Attendre la page de détails
-      await page.waitForSelector('text="Identification de l\'entreprise"', { timeout: 10000 });
-      
-      // Extraire les données
-      const data = await page.evaluate(() => {
-        const result = {};
-        
-        // NEQ
-        const neqRow = document.querySelector('td:has-text("Numéro d\'entreprise du Québec")');
-        if (neqRow) {
-          result.NEQ = neqRow.nextElementSibling?.textContent?.trim();
-        }
-        
-        // Nom
-        const nameRow = document.querySelector('td:has-text("Nom")');
-        if (nameRow) {
-          result.name_official = nameRow.nextElementSibling?.textContent?.trim();
-        }
-        
-        // Statut
-        const statusRow = document.querySelector('td:has-text("Statut")');
-        if (statusRow) {
-          result.status = statusRow.nextElementSibling?.textContent?.trim();
-        }
-        
-        // Forme juridique
-        const formRow = document.querySelector('td:has-text("Forme juridique")');
-        if (formRow) {
-          result.legal_form = formRow.nextElementSibling?.textContent?.trim();
-        }
-        
-        // Adresse
-        const addressRow = document.querySelector('td:has-text("Adresse") + td');
-        if (addressRow) {
-          result.head_office_address = addressRow.textContent?.trim();
-        }
-        
-        return result;
-      });
-      
+      // Extract data from details page
+      const data = await this.extractDetailedInfo(page);
       return [data];
     }
     
@@ -370,3 +342,4 @@ export class REQScraper {
   }
 
 }
+
