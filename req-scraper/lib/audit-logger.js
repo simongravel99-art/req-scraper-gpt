@@ -1,4 +1,4 @@
-cat > lib/audit-logger.js << 'EOF'
+
 import fs from 'fs-extra';
 import path from 'path';
 import pino from 'pino';
@@ -199,4 +199,3 @@ export class AuditLogger {
     return deletedCount;
   }
 }
-EOF
