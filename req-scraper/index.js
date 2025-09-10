@@ -152,6 +152,8 @@ async function searchCompany(page, company) {
   await searchBtn.click();
   await page.waitForLoadState('networkidle').catch(() => {});
 
+  }
+
 
 
 async function openResult(page, company) {
@@ -301,5 +303,6 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
+
 
 
