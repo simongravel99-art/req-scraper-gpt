@@ -23,7 +23,7 @@ async function launchBrowser() {
   return chromium.launch({ headless: !HEADFUL, proxy });
 }
 
-// Click "Accéder au service" and return the correct page (popup or same tab)
+// Click "Accéder au service" and return the page that actually hosts the search
 async function clickAcceder(page) {
   await page.waitForLoadState('domcontentloaded');
 
@@ -35,11 +35,12 @@ async function clickAcceder(page) {
 
   for (const loc of candidates) {
     if (await loc.count()) {
-      const [popup] = await Promise.all([
-        page.waitForEvent('popup').catch(() => null),
+      const [popup, newPage] = await Promise.all([
+        page.waitForEvent('popup').catch(() => null),          // target=_blank
+        page.context().waitForEvent('page').catch(() => null), // some flows open a new page
         loc.first().click()
       ]);
-      return popup || page;
+      return popup || newPage || page;
     }
   }
   return page;
@@ -48,49 +49,73 @@ async function clickAcceder(page) {
 async function searchCompany(page, company) {
   await page.waitForLoadState('domcontentloaded');
 
-  // 1) Accept terms (try page, then any iframe)
-  let tos = page.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
-  if (!await tos.count()) tos = page.locator('input[type="checkbox"]');
-  if (!await tos.count()) {
-    for (const f of page.frames()) {
-      let fcb = f.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
-      if (!await fcb.count()) fcb = f.locator('input[type="checkbox"]');
-      if (await fcb.count()) { tos = fcb; break; }
+  // Small wait so iframes attach
+  await page.waitForTimeout(1200);
+
+  // Helper: try on the top page and then on every frame
+  const contexts = [page, ...page.frames()];
+
+  // Dismiss cookie / modal if present
+  for (const ctx of contexts) {
+    const cookieBtn = ctx.getByRole('button', { name: /j.?accepte|accepter|ok|d'accord/i });
+    if (await cookieBtn.count()) { try { await cookieBtn.first().click({ timeout: 1000 }); } catch {} }
+  }
+
+  // Accept terms
+  let tosChecked = false;
+  for (const ctx of contexts) {
+    let tos = ctx.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
+    if (!await tos.count()) tos = ctx.locator('input[type="checkbox"]');
+    if (await tos.count()) {
+      try { await tos.first().check({ force: true, timeout: 1000 }); tosChecked = true; break; } catch {}
     }
   }
-  if (await tos.count()) { try { await tos.first().check({ force: true }); } catch {} }
 
-  // 2) Find search input (page or iframe)
-  let box = page.getByRole('textbox', { name: /nom.*entreprise|nom/i }).first();
-  if (!await box.count()) box = page.locator('form:has-text("Rechercher une entreprise") input[type="text"]').first();
-  if (!await box.count()) box = page.locator('input[type="text"]').first();
+  // Find a search textbox
+  let box = null;
+  const boxSelectors = [
+    'input[placeholder*="Nom" i]',
+    'input[aria-label*="Nom" i]',
+    'input[name*="Nom" i]',
+    'input[type="search"]',
+    'input[type="text"]'
+  ];
 
-  if (!await box.count()) {
-    for (const f of page.frames()) {
-      let fbox = f.getByRole('textbox', { name: /nom.*entreprise|nom/i }).first();
-      if (!await fbox.count()) fbox = f.locator('form:has-text("Rechercher une entreprise") input[type="text"]').first();
-      if (!await fbox.count()) fbox = f.locator('input[type="text"]').first();
-      if (await fbox.count()) { box = fbox; break; }
+  outer:
+  for (const ctx of contexts) {
+    for (const sel of boxSelectors) {
+      const cand = ctx.locator(sel).first();
+      if (await cand.count()) { box = cand; break outer; }
     }
   }
+
+  if (!box) throw new Error('Search box not found (page or iframes)');
 
   await box.fill('');
   await box.type(company, { delay: 20 });
 
-  // 3) Click Rechercher (page or iframe)
-  let searchBtn = page.getByRole('button', { name: /rechercher/i }).first();
-  if (!await searchBtn.count()) searchBtn = page.locator('button:has-text("Rechercher")').first();
-  if (!await searchBtn.count()) {
-    for (const f of page.frames()) {
-      let fbtn = f.getByRole('button', { name: /rechercher/i }).first();
-      if (!await fbtn.count()) fbtn = f.locator('button:has-text("Rechercher")').first();
-      if (await fbtn.count()) { searchBtn = fbtn; break; }
+  // Click Rechercher
+  let searchBtn = null;
+  const btnSelectors = [
+    'button:has-text("Rechercher")',
+    'input[type="submit"][value*="Rechercher" i]',
+  ];
+  outerBtn:
+  for (const ctx of contexts) {
+    for (const sel of btnSelectors) {
+      const btn = ctx.locator(sel).first();
+      if (await btn.count()) { searchBtn = btn; break outerBtn; }
     }
+    const btnRole = ctx.getByRole('button', { name: /rechercher/i }).first();
+    if (await btnRole.count()) { searchBtn = btnRole; break; }
   }
+
+  if (!searchBtn) throw new Error('Rechercher button not found');
 
   await searchBtn.click();
   await page.waitForLoadState('networkidle');
 }
+
 
 async function openResult(page, company) {
   const nameRe = new RegExp(escRe(company), 'i');
@@ -231,3 +256,4 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
+
