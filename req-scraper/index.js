@@ -1,450 +1,482 @@
 import { chromium } from 'playwright';
-import fs from 'fs';
-import path from 'path';
-import { parse } from 'csv-parse';
-import { stringify } from 'csv-stringify';
-import dotenv from 'dotenv';
+import pLimit from 'p-limit';
+import { setTimeout } from 'timers/promises';
 
-dotenv.config();
-
-const BASE = 'https://www.registreentreprises.gouv.qc.ca/';
-const OUTFILE = process.env.OUTPUT || 'out.csv';
-const DELAY = Number(process.env.REQUEST_DELAY_MS || 2000);
-const HEADFUL = process.env.HEADFUL === '1';
-const DEBUG = process.env.DEBUG === '1';
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-async function debugDump(page, tag = '') {
-  if (!DEBUG) return;
-  try {
-    console.log(`[DBG] ${tag} page url: ${page.url()}`);
-    for (const p of page.context().pages()) console.log('[DBG] ctx page:', p.url());
-    for (const f of page.frames()) console.log('[DBG] frame:', f.url());
-  } catch (e) {
-    console.log('[DBG] debugDump error:', e?.message || e);
+export class REQScraper {
+  constructor(options = {}) {
+    this.options = {
+      headless: true,
+      timeout: options.timeout || 30000,
+      rateLimit: options.rateLimit || 1000,
+      maxRetries: 3,
+      snapshot: options.snapshot || false,
+      proxy: options.proxy,
+      logger: options.logger || console,
+      extractOwnership: options.extractOwnership !== false
+    };
+    
+    this.browser = null;
+    this.context = null;
+    this.rateLimiter = pLimit(1);
+    this.lastRequestTime = 0;
+    this.retryDelays = [500, 1500, 3500];
   }
-}
 
-async function saveArtifacts(page, tag = 'artifact') {
-  if (!DEBUG) return;
-  try {
-    const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const dir = path.join(process.cwd(), 'artifacts');
-    await fs.promises.mkdir(dir, { recursive: true });
-
-    // page screenshot + html
-    try { await page.screenshot({ path: path.join(dir, `${ts}-${tag}-page.png`), fullPage: true }); } catch {}
-    try { await fs.promises.writeFile(path.join(dir, `${ts}-${tag}-page.html`), await page.content()); } catch {}
-
-    // frames (screenshot the <html> element)
-    let idx = 0;
-    for (const f of page.frames()) {
-      const fname = `${ts}-${tag}-frame-${idx++}`;
-      const root = f.locator('html').first();
-      try { if (await root.count()) await root.screenshot({ path: path.join(dir, `${fname}.png`) }); } catch {}
-      try { await fs.promises.writeFile(path.join(dir, `${fname}.html`), await f.content()); } catch {}
+  async initialize() {
+    if (this.browser) return;
+    
+    const launchOptions = {
+      headless: this.options.headless,
+      args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled'
+      ]
+    };
+    
+    if (this.options.proxy) {
+      launchOptions.proxy = this.parseProxy(this.options.proxy);
     }
-    console.log(`[DBG] saved artifacts to ${dir}`);
-  } catch (e) {
-    console.log('[DBG] saveArtifacts error:', e?.message || e);
+    
+    this.browser = await chromium.launch(launchOptions);
+    this.context = await this.browser.newContext({
+      viewport: { width: 1920, height: 1080 },
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      locale: 'fr-CA',
+      timezoneId: 'America/Montreal'
+    });
   }
-}
 
-async function launchBrowser() {
-  const proxy = process.env.PROXY_SERVER ? {
-    server: process.env.PROXY_SERVER,
-    username: process.env.PROXY_USERNAME || undefined,
-    password: process.env.PROXY_PASSWORD || undefined,
-  } : undefined;
-  return chromium.launch({ headless: !HEADFUL, proxy });
-}
+  parseProxy(proxyUrl) {
+    const url = new URL(proxyUrl);
+    return {
+      server: `${url.protocol}//${url.hostname}:${url.port}`,
+      username: url.username || undefined,
+      password: url.password || undefined
+    };
+  }
 
-// Click "Accéder au service" and return the page that actually hosts the search
-async function clickAcceder(page) {
-  await page.waitForLoadState('domcontentloaded');
-
-  const candidates = [
-    page.getByRole('link', { name: /accéder au service/i }),
-    page.getByRole('button', { name: /accéder au service/i }),
-    page.locator('a:has-text("Accéder au service"), button:has-text("Accéder au service")'),
-  ];
-
-  for (const loc of candidates) {
-    if (await loc.count()) {
-      const [popup, newPage] = await Promise.all([
-        page.waitForEvent('popup').catch(() => null),          // target=_blank flow
-        page.context().waitForEvent('page').catch(() => null), // sometimes opens a new page
-        loc.first().click()
-      ]);
-      const svc = popup || newPage || page;
-      await svc.waitForLoadState('domcontentloaded').catch(() => {});
-      await svc.waitForTimeout(800);
-      return svc;
+  async enforceRateLimit() {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+    
+    if (timeSinceLastRequest < this.options.rateLimit) {
+      await setTimeout(this.options.rateLimit - timeSinceLastRequest);
     }
-  }
-  return page;
-}
-
-// Search for a company; return the page that contains the results (could be same page or a new tab)
-async function searchCompany(page, company) {
-  await page.waitForLoadState('domcontentloaded');
-  await page.waitForTimeout(1200); // let iframes attach
-  await debugDump(page, 'before search');
-
-  const contexts = [page, ...page.frames()];
-
-  // Dismiss cookie / modal if shown anywhere
-  for (const ctx of contexts) {
-    const cookieBtn = ctx.getByRole('button', { name: /j.?accepte|accepter|ok|d'accord|continue/i });
-    if (await cookieBtn.count()) { try { await cookieBtn.first().click({ timeout: 800 }); } catch {} }
+    
+    this.lastRequestTime = Date.now();
   }
 
-  // Find the real REGQ search form: it has a "Rechercher" submit
-  let form = null;
-  outerForm:
-  for (const ctx of contexts) {
-    const candidates = ctx.locator('form');
-    const n = await candidates.count();
-    for (let i = 0; i < Math.min(n, 12); i++) {
-      const f = candidates.nth(i);
-      const hasBtn = (await f.getByRole('button', { name: /rechercher/i }).count()) ||
-                     (await f.locator('button:has-text("Rechercher")').count()) ||
-                     (await f.locator('input[type="submit"][value*="Rechercher" i]').count());
-      if (hasBtn) { form = f; break outerForm; }
-    }
-  }
-  if (!form) {
-    await debugDump(page, 'search form not found');
-    await saveArtifacts(page, 'no-form');
-    throw new Error('Search form not found');
-  }
-
-  // Accept TOS inside the form if present
-  try {
-    const tos = form.locator('input[type="checkbox"]');
-    if (await tos.count()) { await tos.first().check({ force: true, timeout: 1000 }).catch(() => {}); }
-  } catch {}
-
-  // Find the company-name input INSIDE the form
-  const inputSelectors = [
-    'input[placeholder*="nom" i]',
-    'input[aria-label*="nom" i]',
-    'input[name*="nom" i]',
-    'input[id*="nom" i]',
-    'input[type="search"]',
-    'input[type="text"]',
-  ];
-  let box = null;
-  for (const sel of inputSelectors) {
-    const cand = form.locator(sel).first();
-    if (await cand.count()) {
-      try { if (await cand.isVisible()) { box = cand; break; } } catch {}
-    }
-  }
-  if (!box) {
-    await debugDump(page, 'search box not found (form-scoped)');
-    await saveArtifacts(page, 'no-box');
-    throw new Error('Search box not found (form)');
+  async search(companyName, attempt = 0) {
+    await this.initialize();
+    
+    return this.rateLimiter(async () => {
+      await this.enforceRateLimit();
+      
+      try {
+        return await this.performSearch(companyName);
+      } catch (error) {
+        if (attempt < this.options.maxRetries) {
+          const delay = this.retryDelays[attempt];
+          this.options.logger.warn(`REQ search failed, retrying in ${delay}ms...`, error.message);
+          await setTimeout(delay);
+          return this.search(companyName, attempt + 1);
+        }
+        throw error;
+      }
+    });
   }
 
-  await box.fill('');
-  await box.type(company, { delay: 20 });
-
-  // Click the Rechercher INSIDE the form (capture new page if opened)
-  let searchBtn =
-      form.getByRole('button', { name: /rechercher/i }).first();
-  if (!await searchBtn.count())
-      searchBtn = form.locator('button:has-text("Rechercher")').first();
-  if (!await searchBtn.count())
-      searchBtn = form.locator('input[type="submit"][value*="Rechercher" i]').first();
-
-  let dest = page;
-  if (await searchBtn.count()) {
-    const [popup, newPage] = await Promise.all([
-      page.waitForEvent('popup').catch(() => null),
-      page.context().waitForEvent('page').catch(() => null),
-      searchBtn.click()
-    ]);
-    dest = popup || newPage || page;
-  } else {
-    // Fallback: submit via Enter and wait for possible new page
-    const [popup, newPage] = await Promise.all([
-      page.waitForEvent('popup').catch(() => null),
-      page.context().waitForEvent('page').catch(() => null),
-      box.press('Enter')
-    ]);
-    dest = popup || newPage || page;
-  }
-
-  await dest.waitForLoadState('domcontentloaded').catch(() => {});
-  await dest.waitForLoadState('networkidle').catch(() => {});
-  await dest.waitForTimeout(800); // settle
-
-  return dest;
-}
-
-// Find and click "Consulter" for the best-matching row; return the destination page (or null)
-async function openResult(page, company) {
-  // Small settle after submission / navigation
-  await page.waitForTimeout(1000);
-
-  // Refresh contexts after potential navigation
-  const contexts = [page, ...page.frames()];
-
-  // Normalize name for accent-insensitive, fuzzy matching
-  const target = company.normalize('NFD').replace(/\p{Diacritic}/gu, '')
-    .replace(/[^a-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-
-  // Fast “no result” check anywhere
-  for (const ctx of contexts) {
-    const noRes = await ctx.locator(':text-matches("aucun résultat|aucune entreprise|aucun enregistrement", "i")').first().count();
-    if (noRes) return null;
-  }
-
-  // Likely containers for rows
-  const rowSelectors = [
-    'table tbody tr',
-    'section:has-text("Résultats") table tbody tr',
-    'article:has-text("Résultats") table tbody tr',
-    'div[class*="result"] table tbody tr',
-    'ul li'
-  ];
-
-  // Action variants
-  const actionSelectors = [
-    'a:has-text("Consulter")',
-    'button:has-text("Consulter")',
-    'a[title*="Consulter" i]',
-    'a[aria-label*="Consulter" i]',
-    'a:has(img[alt*="Consulter" i])',
-    'a:has-text("Voir la fiche")',
-    'a:has-text("Voir")',
-    'a:has-text("Détails")',
-    'button:has-text("Voir")',
-    'button:has-text("Détails")'
-  ];
-
-  // PASS 1 — find a row containing the company name; click its action (or first link)
-  for (const ctx of contexts) {
-    for (const rowsSel of rowSelectors) {
-      const rows = ctx.locator(rowsSel);
-      const count = await rows.count();
-      if (!count) continue;
-
-      for (let i = 0; i < Math.min(count, 80); i++) {
-        const row = rows.nth(i);
-        const text = (await row.innerText().catch(() => '')).normalize('NFD')
-          .replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
-        if (!text) continue;
-
-        const words = target.split(' ').filter(Boolean);
-        const matchesCompany = words.length > 1 ? words.every(w => text.includes(w)) : text.includes(target);
-        if (!matchesCompany) continue;
-
-        // Prefer explicit “Consulter/…” inside this row
-        for (const aSel of actionSelectors) {
-          const act = row.locator(aSel).first();
-          if (await act.count()) {
-            const [popup, newPage] = await Promise.all([
-              page.waitForEvent('popup').catch(() => null),
-              page.context().waitForEvent('page').catch(() => null),
-              act.click()
-            ]);
-            const dest = popup || newPage || page;
-            await dest.waitForLoadState('domcontentloaded').catch(() => {});
-            await dest.waitForTimeout(500);
-            return dest;
+  async performSearch(companyName) {
+    const page = await this.context.newPage();
+    page.setDefaultTimeout(this.options.timeout);
+    
+    try {
+      // Go directly to the enterprise search page
+      await page.goto('https://www.registreentreprises.gouv.qc.ca/REQNA/GR/GR03/GR03A71.RechercheRegistre.MVC/GR03A71', {
+        waitUntil: 'networkidle',
+        timeout: 60000
+      });
+      
+      // Wait for page to fully load
+      await page.waitForTimeout(3000);
+      
+      // Look for the search form - try multiple possible selectors
+      const searchSelectors = [
+        'input[name="Nom"]',
+        'input[placeholder*="nom"]',
+        'input[type="text"]',
+        '#Nom',
+        '[data-testid="search-input"]'
+      ];
+      
+      let searchInput = null;
+      for (const selector of searchSelectors) {
+        try {
+          searchInput = await page.waitForSelector(selector, { timeout: 5000 });
+          if (searchInput) {
+            this.options.logger.debug(`Found search input with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!searchInput) {
+        // Try to find any text input
+        searchInput = await page.$('input[type="text"]');
+      }
+      
+      if (!searchInput) {
+        throw new Error('Search input field not found');
+      }
+      
+      // Clear and fill the search field
+      await searchInput.click();
+      await searchInput.clear();
+      await searchInput.fill(companyName);
+      
+      // Look for and click submit button
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Rechercher")',
+        'input[value*="Rechercher"]',
+        '.btn-primary',
+        '[data-testid="search-button"]'
+      ];
+      
+      let submitButton = null;
+      for (const selector of submitSelectors) {
+        try {
+          submitButton = await page.$(selector);
+          if (submitButton) {
+            this.options.logger.debug(`Found submit button with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!submitButton) {
+        // Try pressing Enter on the search field
+        await searchInput.press('Enter');
+      } else {
+        await submitButton.click();
+      }
+      
+      // Wait for results to load
+      await page.waitForTimeout(5000);
+      
+      // Try to detect if we have results
+      const resultSelectors = [
+        'table tbody tr',
+        '.result-row',
+        '.search-result',
+        '[data-testid="result-row"]',
+        'tr:has(td)',
+        '.table tr'
+      ];
+      
+      let results = [];
+      for (const selector of resultSelectors) {
+        try {
+          const rows = await page.$$(selector);
+          if (rows.length > 0) {
+            this.options.logger.debug(`Found ${rows.length} result rows with selector: ${selector}`);
+            results = await this.parseSearchResultsWithSelector(page, selector);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (results.length === 0) {
+        // Try alternative parsing method - look for any links or buttons that might lead to company details
+        const linkSelectors = [
+          'a:has-text("Consulter")',
+          'button:has-text("Consulter")',
+          'a[href*="NEQ"]',
+          'a[href*="entreprise"]',
+          '.action-link'
+        ];
+        
+        for (const selector of linkSelectors) {
+          try {
+            const links = await page.$$(selector);
+            if (links.length > 0) {
+              this.options.logger.debug(`Found ${links.length} action links with selector: ${selector}`);
+              // Extract basic info and try to get detailed info
+              results = await this.extractBasicInfoFromPage(page, links);
+              break;
+            }
+          } catch (e) {
+            continue;
           }
         }
-
-        // Fallback in the matched row: click the first link (often the company name)
-        const firstLink = row.locator('a').first();
-        if (await firstLink.count()) {
-          const [popup, newPage] = await Promise.all([
-            page.waitForEvent('popup').catch(() => null),
-            page.context().waitForEvent('page').catch(() => null),
-            firstLink.click()
-          ]);
-          const dest = popup || newPage || page;
-          await dest.waitForLoadState('domcontentloaded').catch(() => {});
-          await dest.waitForTimeout(500);
-          return dest;
+      }
+      
+      // If we still have no results, save page content for debugging
+      if (results.length === 0) {
+        if (this.options.snapshot) {
+          const html = await page.content();
+          await this.saveSnapshot(`no-results-${companyName}`, html);
+        }
+        this.options.logger.warn(`No results found for ${companyName}`);
+        return [];
+      }
+      
+      return results;
+      
+    } catch (error) {
+      this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
+      
+      if (this.options.snapshot) {
+        try {
+          const html = await page.content();
+          await this.saveSnapshot(`error-${companyName}`, html);
+        } catch (e) {
+          // Ignore snapshot errors
         }
       }
+      
+      throw error;
+    } finally {
+      await page.close();
     }
   }
 
-  // PASS 2 — no name match; try the first action anywhere
-  for (const ctx of contexts) {
-    for (const aSel of actionSelectors) {
-      const any = ctx.locator(aSel).first();
-      if (await any.count()) {
-        const [popup, newPage] = await Promise.all([
-          page.waitForEvent('popup').catch(() => null),
-          page.context().waitForEvent('page').catch(() => null),
-          any.click()
-        ]);
-        const dest = popup || newPage || page;
-        await dest.waitForLoadState('domcontentloaded').catch(() => {});
-        await dest.waitForTimeout(500);
-        return dest;
+  async parseSearchResultsWithSelector(page, selector) {
+    return await page.evaluate((sel) => {
+      const rows = document.querySelectorAll(sel);
+      const results = [];
+      
+      for (const row of rows) {
+        // Skip header rows
+        if (row.querySelector('th')) continue;
+        
+        const cells = row.querySelectorAll('td');
+        if (cells.length === 0) continue;
+        
+        // Try to extract company information from the row
+        let neq = '', name = '', address = '';
+        
+        // Look for NEQ in the first cell or any cell
+        for (let i = 0; i < cells.length; i++) {
+          const cellText = cells[i].textContent.trim();
+          
+          // NEQ pattern: usually starts with numbers
+          if (/^\d{10}/.test(cellText)) {
+            neq = cellText;
+          }
+          
+          // Company name is usually the longest text cell
+          if (cellText.length > name.length && !cellText.match(/^\d/) && cellText.length > 10) {
+            name = cellText;
+          }
+          
+          // Address usually contains street indicators
+          if (cellText.includes('RUE') || cellText.includes('AVENUE') || cellText.includes('BOULEVARD')) {
+            address = cellText;
+          }
+        }
+        
+        // If we found at least a name, add it to results
+        if (name) {
+          results.push({
+            NEQ: neq,
+            name: name,
+            name_official: name,
+            address: address,
+            status: 'Unknown'
+          });
+        }
       }
-    }
+      
+      return results;
+    }, selector);
   }
 
-  // PASS 3 — absolute fallback: first link in a results table
-  for (const ctx of contexts) {
-    const firstRowLink = ctx.locator('table tbody tr a').first();
-    if (await firstRowLink.count()) {
-      const [popup, newPage] = await Promise.all([
-        page.waitForEvent('popup').catch(() => null),
-        page.context().waitForEvent('page').catch(() => null),
-        firstRowLink.click()
+  async extractBasicInfoFromPage(page, actionLinks) {
+    const results = [];
+    
+    // Try to extract info from the page content
+    const pageData = await page.evaluate(() => {
+      const results = [];
+      
+      // Look for any text that might be company names
+      const textElements = document.querySelectorAll('td, .company-name, .result-item');
+      
+      for (const element of textElements) {
+        const text = element.textContent.trim();
+        
+        // Look for text that looks like company names (contains INC, LTEE, etc.)
+        if (text.match(/(INC|LTÉE|LTEE|CORP|S\.E\.N\.C)/i) && text.length > 5) {
+          results.push({
+            NEQ: '',
+            name: text,
+            name_official: text,
+            address: '',
+            status: 'Unknown'
+          });
+        }
+      }
+      
+      return results;
+    });
+    
+    return pageData;
+  }
+
+  async extractDetailedInfo(page) {
+    const info = await page.evaluate(() => {
+      const data = {};
+      
+      const getText = (selectors) => {
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (element) return element.textContent.trim();
+        }
+        return null;
+      };
+      
+      // Try multiple selectors for each field
+      data.NEQ = getText([
+        '#CPH_K1ZoneContenu1_Cadr_IdEntreprise span',
+        '[data-field="neq"]',
+        '.neq',
+        'span:contains("NEQ")'
       ]);
-      const dest = popup || newPage || page;
-      await dest.waitForLoadState('domcontentloaded').catch(() => {});
-      await dest.waitForTimeout(500);
-      return dest;
+      
+      data.name_official = getText([
+        '#CPH_K1ZoneContenu1_Cadr_NomEntreprise span',
+        '[data-field="name"]',
+        '.company-name',
+        'h1',
+        'h2'
+      ]);
+      
+      data.status = getText([
+        '#CPH_K1ZoneContenu1_Cadr_StatutEntreprise span',
+        '[data-field="status"]',
+        '.status'
+      ]);
+      
+      data.legal_form = getText([
+        '#CPH_K1ZoneContenu1_Cadr_FormeJuridique span',
+        '[data-field="legal-form"]',
+        '.legal-form'
+      ]);
+      
+      // Try to find address information
+      const addressElements = document.querySelectorAll('.address, .adresse, [data-field="address"]');
+      if (addressElements.length > 0) {
+        const addressParts = [];
+        addressElements.forEach(el => {
+          const text = el.textContent.trim();
+          if (text) addressParts.push(text);
+        });
+        data.head_office_address = addressParts.join(', ');
+      }
+      
+      data.registration_date = getText([
+        '#CPH_K1ZoneContenu1_Cadr_DateImmatriculation span',
+        '[data-field="registration-date"]',
+        '.registration-date'
+      ]);
+      
+      return data;
+    });
+    
+    if (this.options.extractOwnership) {
+      const ownershipInfo = await this.extractOwnershipInfo(page);
+      return { ...info, ...ownershipInfo };
     }
+    
+    return info;
   }
 
-  await debugDump(page, 'no action found in results');
-  await saveArtifacts(page, 'no-action');
-  return null;
-}
-
-
-async function getFieldByLabel(page, labels) {
-  for (const label of labels) {
-    const xpath = `//*[normalize-space(text())='${label}']/following-sibling::*[1]`;
-    const el = page.locator(`xpath=${xpath}`).first();
-    if (await el.count()) {
-      const val = (await el.innerText()).trim();
-      if (val) return val;
-    }
-  }
-  for (const label of labels) {
-    const el = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]`).first();
-      if (await el.count()) {
-      const sib = el.locator('xpath=following-sibling::*[1]');
-      if (await sib.count()) return (await sib.innerText()).trim();
-    }
-  }
-  return '';
-}
-
-async function scrapeDetails(page) {
-  await page.waitForLoadState('domcontentloaded');
-  const data = {};
-  data.page_title = (await page.title()) || '';
-  data.neq = await getFieldByLabel(page, ["Numéro d'entreprise (NEQ)", "NEQ", "No d'entreprise (NEQ)"]);
-  data.nom = await getFieldByLabel(page, ['Nom', 'Dénomination sociale']);
-  data.adresse_siege = await getFieldByLabel(page, ['Adresse du siège', 'Adresse du domicile élu', 'Adresse du domicile', 'Adresse du siège social']);
-  data.date_constitution = await getFieldByLabel(page, ['Date de constitution', 'Date de création']);
-  data.forme_juridique = await getFieldByLabel(page, ['Forme juridique', 'Type de personne']);
-  data.statut = await getFieldByLabel(page, ['Statut au registre', 'Statut']);
-
-  const dirigeantsSection = page.locator('xpath=//*[contains(translate(text(), "DIRIGEANTSADMINISTRATEURS", "dirigeantsadministrateurs"), "dirigeants") or contains(translate(text(), "DIRIGEANTSADMINISTRATEURS", "dirigeantsadministrateurs"), "administrateurs")]/ancestor::*[self::section or self::div][1]');
-  if (await dirigeantsSection.count()) {
-    const items = dirigeantsSection.locator('li, tr, div');
-    const n = Math.min(await items.count(), 25);
-    const dirigeants = [];
-    for (let i = 0; i < n; i++) {
-      const t = (await items.nth(i).innerText()).trim().replace(/\s+/g, ' ');
-      if (t && t.length > 5) dirigeants.push(t);
-    }
-    data.dirigeants_raw = dirigeants.join(' | ');
-  } else {
-    const allText = (await page.locator('main').innerText()).trim();
-    const match = allText.match(/Dirigeants?[\s\S]{0,800}/i);
-    data.dirigeants_raw = match ? match[0].replace(/\s+/g, ' ') : '';
-  }
-  return data;
-}
-
-async function processOne(browser, company) {
-  const ctx = await browser.newContext({
-    viewport: { width: 1400, height: 900 },
-    locale: 'fr-CA',
-    timezoneId: 'America/Toronto',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    extraHTTPHeaders: { 'Accept-Language': 'fr-CA,fr;q=0.9,en;q=0.8' },
-  });
-  const page = await ctx.newPage();
-  try {
-    await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await debugDump(page, 'after goto BASE');
-
-    const svc = await clickAcceder(page);
-    await svc.waitForLoadState('domcontentloaded');
-    await debugDump(svc, 'after clickAcceder');
-
-    const searchPage = await searchCompany(svc, company);
-    const dest = await openResult(searchPage, company);
-    if (!dest) throw new Error('No result row to open');
-
-    const data = await scrapeDetails(dest);
-    data.input_company = company;
-    return { ok: true, data };
-  } catch (e) {
-    console.error(`[ERR] ${company}:`, e.message);
-    return { ok: false, data: { input_company: company, error: String(e.message || e) } };
-  } finally {
-    await ctx.close();
-    await sleep(DELAY);
-  }
-}
-
-async function readCompanies(file) {
-  if (!file) throw new Error('Provide companies.csv path');
-  const rows = await fs.promises.readFile(file, 'utf8');
-  const lines = rows.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  if (lines.length === 1 && lines[0].includes(',')) {
-    return new Promise((resolve, reject) => {
-      const names = [];
-      parse(rows, {}, (err, out) => {
-        if (err) return reject(err);
-        for (const r of out) if (r[0]) names.push(String(r[0]).trim());
-        resolve(names);
+  async extractOwnershipInfo(page) {
+    try {
+      const ownership = await page.evaluate(() => {
+        const data = {
+          shareholders: [],
+          administrators: [],
+          ultimate_beneficiaries: [],
+          shareholders_agreement: null
+        };
+        
+        // Look for ownership sections in the page
+        const allText = document.body.textContent;
+        
+        // Try to find shareholder information
+        const shareholderMatches = allText.match(/actionnaire[s]?[:\s]+([^\.]+)/gi);
+        if (shareholderMatches) {
+          shareholderMatches.forEach(match => {
+            const name = match.replace(/actionnaire[s]?[:\s]+/i, '').trim();
+            if (name && name.length > 2) {
+              data.shareholders.push({
+                name: name,
+                is_majority: allText.toLowerCase().includes('majoritaire')
+              });
+            }
+          });
+        }
+        
+        // Try to find administrator information
+        const adminMatches = allText.match(/administrateur[s]?[:\s]+([^\.]+)/gi);
+        if (adminMatches) {
+          adminMatches.forEach(match => {
+            const name = match.replace(/administrateur[s]?[:\s]+/i, '').trim();
+            if (name && name.length > 2) {
+              data.administrators.push({
+                full_name: name,
+                position: 'Administrateur'
+              });
+            }
+          });
+        }
+        
+        return data;
       });
-    });
-  }
-  return lines;
-}
-
-async function writeCsv(records) {
-  return new Promise((resolve, reject) => {
-    stringify(records, { header: true }, (err, csv) => {
-      if (err) return reject(err);
-      fs.writeFileSync(OUTFILE, csv);
-      resolve();
-    });
-  });
-}
-
-(async () => {
-  try {
-    const inputPath = process.argv[2] || 'companies.csv';
-    const companies = await readCompanies(inputPath);
-    console.log(`Loaded ${companies.length} companies`);
-
-    const browser = await launchBrowser();
-    const out = [];
-
-    for (const name of companies) {
-      console.log(`→ ${name}`);
-      const res = await processOne(browser, name);
-      out.push(res.data);
+      
+      return ownership;
+      
+    } catch (error) {
+      this.options.logger.warn(`Could not extract ownership info:`, error.message);
+      return {
+        shareholders: [],
+        administrators: [],
+        ultimate_beneficiaries: [],
+        shareholders_agreement: null
+      };
     }
-    await browser.close();
-
-    await writeCsv(out);
-    console.log(`Saved ${out.length} rows to ${OUTFILE}`);
-  } catch (e) {
-    console.error(e);
-    process.exit(1);
   }
-})();
 
+  async saveSnapshot(identifier, html) {
+    if (this.options.snapshot) {
+      const fs = await import('fs-extra');
+      const path = await import('path');
+      
+      const filename = `${identifier.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.html`;
+      const filepath = path.join('artifacts', filename);
+      
+      await fs.ensureDir('artifacts');
+      await fs.writeFile(filepath, html);
+      
+      this.options.logger.debug(`Snapshot saved: ${filepath}`);
+    }
+  }
+
+  async close() {
+    if (this.browser) {
+      await this.browser.close();
+      this.browser = null;
+      this.context = null;
+    }
+  }
+}
