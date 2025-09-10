@@ -76,122 +76,112 @@ async function searchCompany(page, company) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1200); // let iframes attach
   await debugDump(page, 'before search');
-  
-  // Build a list of contexts to probe: the page + all frames
+
+  // Probe page + all frames
   const contexts = [page, ...page.frames()];
 
-  // Dismiss cookie / modal if shown anywhere
-  for (const ctx of contexts) {
-    const cookieBtn = ctx.getByRole('button', { name: /j.?accepte|accepter|ok|d'accord|continue/i });
-    if (await cookieBtn.count()) { try { await cookieBtn.first().click({ timeout: 800 }); } catch {} }
-  }
+  // Find the real REGQ search form: it has a Rechercher button
+  let form = null, formCtx = null;
 
-  // Accept TOS if present (checkbox is required before "Rechercher" enables)
+  outerForm:
   for (const ctx of contexts) {
-    let tos = ctx.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
-    if (!await tos.count()) tos = ctx.locator('input[type="checkbox"]');
-    if (await tos.count()) { try { await tos.first().check({ force: true, timeout: 800 }); break; } catch {} }
-  }
-
-  // Find a visible search input (very permissive selectors)
-  let box = null;
-  outer:
-  for (const ctx of contexts) {
-    const candidates = [
-      'input[placeholder*="nom" i]',
-      'input[aria-label*="nom" i]',
-      'input[name*="nom" i]',
-      'input[id*="nom" i]',
-      'input[type="search"]',
-      'input[type="text"]'
-    ];
-    for (const sel of candidates) {
-      const cand = ctx.locator(sel).first();
-      if (await cand.count()) {
-        try {
-          if (await cand.isVisible()) { box = cand; break outer; }
-        } catch {}
-      }
+    const candidates = ctx.locator('form');
+    const n = await candidates.count();
+    for (let i = 0; i < Math.min(n, 10); i++) {
+      const f = candidates.nth(i);
+      const hasBtn = await f.getByRole('button', { name: /rechercher/i }).count()
+        || await f.locator('button:has-text("Rechercher")').count()
+        || await f.locator('input[type="submit"][value*="Rechercher" i]').count();
+      if (hasBtn) { form = f; formCtx = ctx; break outerForm; }
     }
   }
-  // ...loops that try to find `box` in page + frames...
+  if (!form) {
+    await debugDump(page, 'search form not found');
+    throw new Error('Search form not found');
+  }
 
-  // ⬇️ INSERT BLOCK A HERE
+  // Accept TOS inside the form if present
+  try {
+    const tos = form.locator('input[type="checkbox"]');
+    if (await tos.count()) { await tos.first().check({ force: true, timeout: 1000 }).catch(() => {}); }
+  } catch {}
+
+  // Find the company-name input INSIDE the form
+  const inputSelectors = [
+    'input[placeholder*="nom" i]',
+    'input[aria-label*="nom" i]',
+    'input[name*="nom" i]',
+    'input[id*="nom" i]',
+    'input[type="search"]',
+    'input[type="text"]',
+  ];
+  let box = null;
+  for (const sel of inputSelectors) {
+    const cand = form.locator(sel).first();
+    if (await cand.count()) {
+      try { if (await cand.isVisible()) { box = cand; break; } } catch {}
+    }
+  }
   if (!box) {
-    await debugDump(page, 'search box not found');
-    throw new Error('Search box not found (page or iframes)');
+    await debugDump(page, 'search box not found (form-scoped)');
+    throw new Error('Search box not found (form)');
   }
 
   await box.fill('');
   await box.type(company, { delay: 20 });
 
-
-  // Click Rechercher (button or submit input)
-  let searchBtn = null;
-  outerBtn:
-  for (const ctx of contexts) {
-    const btns = [
-      'button:has-text("Rechercher")',
-      'input[type="submit"][value*="Rechercher" i]',
-    ];
-    for (const sel of btns) {
-      const cand = ctx.locator(sel).first();
-      if (await cand.count()) { searchBtn = cand; break outerBtn; }
-    }
-    const byRole = ctx.getByRole('button', { name: /rechercher/i }).first();
-    if (await byRole.count()) { searchBtn = byRole; break; }
-  }
-  // ...loops that try to find `searchBtn` in page + frames...
-
-  // ⬇️ INSERT BLOCK B HERE
-  if (!searchBtn) {
-    await debugDump(page, 'rechercher button not found');
+  // Click the Rechercher INSIDE the form
+  let searchBtn =
+      form.getByRole('button', { name: /rechercher/i }).first();
+  if (!await searchBtn.count())
+      searchBtn = form.locator('button:has-text("Rechercher")').first();
+  if (!await searchBtn.count())
+      searchBtn = form.locator('input[type="submit"][value*="Rechercher" i]').first();
+  if (!await searchBtn.count()) {
+    await debugDump(page, 'rechercher button not found (form-scoped)');
     throw new Error('Rechercher button not found');
   }
 
   await searchBtn.click();
   await page.waitForLoadState('networkidle').catch(() => {});
-
-  }
-
+  // small settle
+  await page.waitForTimeout(800);
+}
 
 
 async function openResult(page, company) {
+  const contexts = [page, ...page.frames()];
   const nameRe = new RegExp(escRe(company), 'i');
-  const rows = page.locator('section, article, li, div').filter({ hasText: nameRe });
-  const count = await rows.count();
-  if (count) {
-    for (let i = 0; i < Math.min(count, 10); i++) {
+
+  // Wait briefly for results or a "no result" message anywhere
+  const waited = await Promise.race(
+    contexts.map(ctx => ctx.locator('a:has-text("Consulter"), button:has-text("Consulter")').first().waitFor({ timeout: 4000 }).then(() => 'hasConsulter').catch(() => null))
+  ).catch(() => null);
+
+  // If no quick signal, still proceed to search manually
+  for (const ctx of contexts) {
+    // If there's an explicit "no result" message, bail early
+    const noRes = await ctx.locator(':text-matches("aucun résultat|aucune entreprise", "i")').first().count();
+    if (noRes) return false;
+
+    // Prefer a row that contains the company name, then click its Consulter
+    const rows = ctx.locator('section, article, li, tr, div').filter({ hasText: nameRe });
+    const rc = await rows.count();
+    for (let i = 0; i < Math.min(rc, 20); i++) {
       const row = rows.nth(i);
-      const consulter = row.getByRole('link', { name: /consulter/i }).first();
+      const consulter = row.locator('a:has-text("Consulter"), button:has-text("Consulter")').first();
       if (await consulter.count()) { await consulter.click(); return true; }
-      const consulterBtn = row.locator('a:has-text("Consulter"), button:has-text("Consulter")').first();
-      if (await consulterBtn.count()) { await consulterBtn.click(); return true; }
     }
+
+    // Fallback: first Consulter anywhere
+    const any = ctx.locator('a:has-text("Consulter"), button:has-text("Consulter")').first();
+    if (await any.count()) { await any.click(); return true; }
   }
-  const anyConsulter = page.getByRole('link', { name: /consulter/i }).first();
-  if (await anyConsulter.count()) { await anyConsulter.click(); return true; }
+
+  await debugDump(page, 'no Consulter found');
   return false;
 }
 
-async function getFieldByLabel(page, labels) {
-  for (const label of labels) {
-    const xpath = `//*[normalize-space(text())='${label}']/following-sibling::*[1]`;
-    const el = page.locator(`xpath=${xpath}`).first();
-    if (await el.count()) {
-      const val = (await el.innerText()).trim();
-      if (val) return val;
-    }
-  }
-  for (const label of labels) {
-    const el = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]`).first();
-    if (await el.count()) {
-      const sib = el.locator('xpath=following-sibling::*[1]');
-      if (await sib.count()) return (await sib.innerText()).trim();
-    }
-  }
-  return '';
-}
 
 async function scrapeDetails(page) {
   await page.waitForLoadState('domcontentloaded');
@@ -303,6 +293,7 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
+
 
 
 
