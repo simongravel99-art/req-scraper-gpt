@@ -33,14 +33,17 @@ async function saveArtifacts(page, tag = 'artifact') {
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
     const dir = path.join(process.cwd(), 'artifacts');
     await fs.promises.mkdir(dir, { recursive: true });
+
     // page screenshot + html
     try { await page.screenshot({ path: path.join(dir, `${ts}-${tag}-page.png`), fullPage: true }); } catch {}
     try { await fs.promises.writeFile(path.join(dir, `${ts}-${tag}-page.html`), await page.content()); } catch {}
-    // frames
+
+    // frames (screenshot the <html> element)
     let idx = 0;
     for (const f of page.frames()) {
       const fname = `${ts}-${tag}-frame-${idx++}`;
-      try { await f.screenshot({ path: path.join(dir, `${fname}.png`), fullPage: true }); } catch {}
+      const root = f.locator('html').first();
+      try { if (await root.count()) await root.screenshot({ path: path.join(dir, `${fname}.png`) }); } catch {}
       try { await fs.promises.writeFile(path.join(dir, `${fname}.html`), await f.content()); } catch {}
     }
     console.log(`[DBG] saved artifacts to ${dir}`);
@@ -84,7 +87,7 @@ async function clickAcceder(page) {
   return page;
 }
 
-// Search for a company using the scoped REGQ form (page + iframes)
+// Search for a company; return the page that contains the results (could be same page or a new tab)
 async function searchCompany(page, company) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1200); // let iframes attach
@@ -149,7 +152,7 @@ async function searchCompany(page, company) {
   await box.fill('');
   await box.type(company, { delay: 20 });
 
-  // Click the Rechercher INSIDE the form (or press Enter fallback)
+  // Click the Rechercher INSIDE the form (capture new page if opened)
   let searchBtn =
       form.getByRole('button', { name: /rechercher/i }).first();
   if (!await searchBtn.count())
@@ -157,15 +160,29 @@ async function searchCompany(page, company) {
   if (!await searchBtn.count())
       searchBtn = form.locator('input[type="submit"][value*="Rechercher" i]').first();
 
+  let dest = page;
   if (await searchBtn.count()) {
-    await searchBtn.click();
+    const [popup, newPage] = await Promise.all([
+      page.waitForEvent('popup').catch(() => null),
+      page.context().waitForEvent('page').catch(() => null),
+      searchBtn.click()
+    ]);
+    dest = popup || newPage || page;
   } else {
-    // Fallback: submit via Enter
-    await box.press('Enter');
+    // Fallback: submit via Enter and wait for possible new page
+    const [popup, newPage] = await Promise.all([
+      page.waitForEvent('popup').catch(() => null),
+      page.context().waitForEvent('page').catch(() => null),
+      box.press('Enter')
+    ]);
+    dest = popup || newPage || page;
   }
 
-  await page.waitForLoadState('networkidle').catch(() => {});
-  await page.waitForTimeout(800); // settle
+  await dest.waitForLoadState('domcontentloaded').catch(() => {});
+  await dest.waitForLoadState('networkidle').catch(() => {});
+  await dest.waitForTimeout(800); // settle
+
+  return dest;
 }
 
 // Find and click "Consulter" for the best-matching row; return the destination page (or null)
@@ -213,7 +230,7 @@ async function openResult(page, company) {
       const count = await rows.count();
       if (!count) continue;
 
-      for (let i = 0; i < Math.min(count, 50); i++) {
+      for (let i = 0; i < Math.min(count, 60); i++) {
         const row = rows.nth(i);
         const text = (await row.innerText().catch(() => '')).normalize('NFD')
           .replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
@@ -275,7 +292,7 @@ async function getFieldByLabel(page, labels) {
   }
   for (const label of labels) {
     const el = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]`).first();
-    if (await el.count()) {
+      if (await el.count()) {
       const sib = el.locator('xpath=following-sibling::*[1]');
       if (await sib.count()) return (await sib.innerText()).trim();
     }
@@ -329,9 +346,8 @@ async function processOne(browser, company) {
     await svc.waitForLoadState('domcontentloaded');
     await debugDump(svc, 'after clickAcceder');
 
-    await searchCompany(svc, company);
-
-    const dest = await openResult(svc, company);
+    const searchPage = await searchCompany(svc, company);
+    const dest = await openResult(searchPage, company);
     if (!dest) throw new Error('No result row to open');
 
     const data = await scrapeDetails(dest);
