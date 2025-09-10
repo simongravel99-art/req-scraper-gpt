@@ -20,14 +20,28 @@ export class REQScraper {
     this.rateLimiter = pLimit(1);
     this.lastRequestTime = 0;
     this.retryDelays = [500, 1500, 3500];
+    this.sessionCounter = 0; // For forcing proxy rotation
   }
 
-  async initialize() {
+  async initialize(forceNewSession = false) {
+    // Force new browser session for proxy rotation
+    if (this.browser && forceNewSession) {
+      await this.close();
+    }
+    
     if (this.browser) return;
+    
+    this.sessionCounter++;
     
     const launchOptions = {
       headless: this.options.headless,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: [
+        '--no-sandbox', 
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-blink-features=AutomationControlled',
+        `--user-data-dir=/tmp/chrome-session-${this.sessionCounter}` // Force new session
+      ]
     };
     
     if (this.options.proxy) {
@@ -37,7 +51,7 @@ export class REQScraper {
     this.browser = await chromium.launch(launchOptions);
     this.context = await this.browser.newContext({
       viewport: { width: 1920, height: 1080 },
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Session-${this.sessionCounter}`,
       locale: 'fr-CA',
       timezoneId: 'America/Montreal'
     });
@@ -63,13 +77,64 @@ export class REQScraper {
     this.lastRequestTime = Date.now();
   }
 
+  async checkIPAndAccess() {
+    const page = await this.context.newPage();
+    try {
+      // Check current IP
+      await page.goto('https://httpbin.org/ip', { waitUntil: 'networkidle', timeout: 10000 });
+      const ipResponse = await page.textContent('body');
+      const currentIP = JSON.parse(ipResponse).origin;
+      this.options.logger.info(`Using IP: ${currentIP}`);
+      
+      // Test Quebec site accessibility
+      await page.goto('https://www.registreentreprises.gouv.qc.ca/REQNA/GR/GR03/GR03A71.RechercheRegistre.MVC/GR03A71', {
+        waitUntil: 'networkidle',
+        timeout: 15000
+      });
+      
+      const content = await page.textContent('body');
+      const isBlocked = content.includes('temporairement interdit');
+      
+      if (isBlocked) {
+        this.options.logger.warn(`IP ${currentIP} is blocked, attempting rotation...`);
+        await page.close();
+        return false;
+      }
+      
+      this.options.logger.info(`IP ${currentIP} is accessible`);
+      await page.close();
+      return true;
+      
+    } catch (error) {
+      this.options.logger.error(`IP check failed: ${error.message}`);
+      await page.close();
+      return false;
+    }
+  }
+
   async search(companyName, attempt = 0) {
-    await this.initialize();
+    // Initialize with potential proxy rotation
+    await this.initialize(attempt > 0);
     
     return this.rateLimiter(async () => {
       await this.enforceRateLimit();
       
       try {
+        // Check if current IP is accessible before searching
+        const isAccessible = await this.checkIPAndAccess();
+        if (!isAccessible && attempt < this.options.maxRetries) {
+          // Force new session to get new IP
+          await this.close();
+          const delay = this.retryDelays[attempt] + (Math.random() * 5000); // Add randomness
+          this.options.logger.warn(`Rotating proxy and retrying in ${delay}ms...`);
+          await setTimeout(delay);
+          return this.search(companyName, attempt + 1);
+        }
+        
+        if (!isAccessible) {
+          throw new Error('All IPs blocked, cannot access Quebec registry');
+        }
+        
         return await this.performSearch(companyName);
       } catch (error) {
         if (attempt < this.options.maxRetries) {
@@ -84,158 +149,294 @@ export class REQScraper {
   }
 
   async performSearch(companyName) {
-  const page = await this.context.newPage();
-  page.setDefaultTimeout(this.options.timeout);
-  
-  try {
-    await page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnt_PC/PageRechSimple.aspx', {
-      waitUntil: 'networkidle',
-      timeout: 60000
-    });
+    const page = await this.context.newPage();
+    page.setDefaultTimeout(this.options.timeout);
     
-    // IMPORTANT: Wait 20 seconds for page to fully load
-    await page.waitForTimeout(20000);
-    
-    // Fill search field
-    const searchInput = await page.$('input[type="text"]');
-    if (!searchInput) {
-      throw new Error('Search input not found');
-    }
-    await searchInput.fill(companyName);
-    
-    // Check the checkbox
-    const checkbox = await page.$('input[type="checkbox"]');
-    if (checkbox) {
-      await checkbox.check();
-    }
-    
-    // Click search button
-    const searchButton = await page.$('input[value="Rechercher"]');
-    if (searchButton) {
-      await searchButton.click();
-    }
-    
-    // Wait for results
-    await page.waitForTimeout(10000);
-    
-    // Click first Consulter button
-    const consultButtons = await page.$$('button:has-text("Consulter")');
-    if (consultButtons.length > 0) {
-      await consultButtons[0].click();
+    try {
+      // Go directly to the enterprise search page
+      await page.goto('https://www.registreentreprises.gouv.qc.ca/REQNA/GR/GR03/GR03A71.RechercheRegistre.MVC/GR03A71', {
+        waitUntil: 'networkidle',
+        timeout: 60000
+      });
+      
+      // Double-check we're not blocked
+      const content = await page.textContent('body');
+      if (content.includes('temporairement interdit')) {
+        throw new Error('IP blocked during search');
+      }
+      
+      // Wait for page to fully load
+      await page.waitForTimeout(3000);
+      
+      // Look for the search form - try multiple possible selectors
+      const searchSelectors = [
+        'input[name="Nom"]',
+        'input[placeholder*="nom"]',
+        'input[type="text"]',
+        '#Nom',
+        '[data-testid="search-input"]'
+      ];
+      
+      let searchInput = null;
+      for (const selector of searchSelectors) {
+        try {
+          searchInput = await page.waitForSelector(selector, { timeout: 5000 });
+          if (searchInput) {
+            this.options.logger.debug(`Found search input with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!searchInput) {
+        searchInput = await page.$('input[type="text"]');
+      }
+      
+      if (!searchInput) {
+        throw new Error('Search input field not found');
+      }
+      
+      // Clear and fill the search field
+      await searchInput.click();
+      await searchInput.clear();
+      await searchInput.fill(companyName);
+      
+      // Look for and click submit button
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("Rechercher")',
+        'input[value*="Rechercher"]',
+        '.btn-primary',
+        '[data-testid="search-button"]'
+      ];
+      
+      let submitButton = null;
+      for (const selector of submitSelectors) {
+        try {
+          submitButton = await page.$(selector);
+          if (submitButton) {
+            this.options.logger.debug(`Found submit button with selector: ${selector}`);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (!submitButton) {
+        await searchInput.press('Enter');
+      } else {
+        await submitButton.click();
+      }
+      
+      // Wait for results to load
       await page.waitForTimeout(5000);
       
-      // Extract data from details page
-      const data = await this.extractDetailedInfo(page);
-      return [data];
-    }
-    
-    return [];
-    
-  } catch (error) {
-    this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
-    throw error;
-  } finally {
-    await page.close();
-  }
-}
-
-  async parseSearchResults(page) {
-    const results = await page.evaluate(() => {
-      const rows = document.querySelectorAll('.k1-grille-ligne');
-      const data = [];
+      // Try to detect if we have results
+      const resultSelectors = [
+        'table tbody tr',
+        '.result-row',
+        '.search-result',
+        '[data-testid="result-row"]',
+        'tr:has(td)',
+        '.table tr'
+      ];
       
-      rows.forEach((row, index) => {
-        if (index === 0) return;
+      let results = [];
+      for (const selector of resultSelectors) {
+        try {
+          const rows = await page.$$(selector);
+          if (rows.length > 0) {
+            this.options.logger.debug(`Found ${rows.length} result rows with selector: ${selector}`);
+            results = await this.parseSearchResultsWithSelector(page, selector);
+            break;
+          }
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      if (results.length === 0) {
+        const linkSelectors = [
+          'a:has-text("Consulter")',
+          'button:has-text("Consulter")',
+          'a[href*="NEQ"]',
+          'a[href*="entreprise"]',
+          '.action-link'
+        ];
+        
+        for (const selector of linkSelectors) {
+          try {
+            const links = await page.$$(selector);
+            if (links.length > 0) {
+              this.options.logger.debug(`Found ${links.length} action links with selector: ${selector}`);
+              results = await this.extractBasicInfoFromPage(page, links);
+              break;
+            }
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+      
+      if (results.length === 0) {
+        if (this.options.snapshot) {
+          const html = await page.content();
+          await this.saveSnapshot(`no-results-${companyName}`, html);
+        }
+        this.options.logger.warn(`No results found for ${companyName}`);
+        return [];
+      }
+      
+      return results;
+      
+    } catch (error) {
+      this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
+      
+      if (this.options.snapshot) {
+        try {
+          const html = await page.content();
+          await this.saveSnapshot(`error-${companyName}`, html);
+        } catch (e) {
+          // Ignore snapshot errors
+        }
+      }
+      
+      throw error;
+    } finally {
+      await page.close();
+    }
+  }
+
+  async parseSearchResultsWithSelector(page, selector) {
+    return await page.evaluate((sel) => {
+      const rows = document.querySelectorAll(sel);
+      const results = [];
+      
+      for (const row of rows) {
+        if (row.querySelector('th')) continue;
         
         const cells = row.querySelectorAll('td');
-        if (cells.length >= 4) {
-          const neqLink = cells[0].querySelector('a');
-          const neq = neqLink ? neqLink.textContent.trim() : cells[0].textContent.trim();
-          const name = cells[1].textContent.trim();
-          const otherNames = cells[2].textContent.trim();
-          const address = cells[3].textContent.trim();
+        if (cells.length === 0) continue;
+        
+        let neq = '', name = '', address = '';
+        
+        for (let i = 0; i < cells.length; i++) {
+          const cellText = cells[i].textContent.trim();
           
-          data.push({
+          if (/^\d{10}/.test(cellText)) {
+            neq = cellText;
+          }
+          
+          if (cellText.length > name.length && !cellText.match(/^\d/) && cellText.length > 10) {
+            name = cellText;
+          }
+          
+          if (cellText.includes('RUE') || cellText.includes('AVENUE') || cellText.includes('BOULEVARD')) {
+            address = cellText;
+          }
+        }
+        
+        if (name) {
+          results.push({
             NEQ: neq,
             name: name,
             name_official: name,
-            other_names: otherNames,
             address: address,
             status: 'Unknown'
           });
         }
-      });
-      
-      return data;
-    });
-    
-    return results;
-  }
-
-  async getDetailedInfo(page, basicInfo, resultIndex) {
-    try {
-      // CLICK ON "CONSULTER" BUTTON INSTEAD OF NEQ LINK
-      const consultButtons = await page.$$('a:has-text("Consulter"), button:has-text("Consulter")');
-      
-      if (!consultButtons[resultIndex]) {
-        return basicInfo;
       }
       
-      const [newPage] = await Promise.all([
-        this.context.waitForEvent('page'),
-        consultButtons[resultIndex].click()
-      ]);
+      return results;
+    }, selector);
+  }
+
+  async extractBasicInfoFromPage(page, actionLinks) {
+    const results = [];
+    
+    const pageData = await page.evaluate(() => {
+      const results = [];
       
-      await newPage.waitForLoadState('networkidle');
+      const textElements = document.querySelectorAll('td, .company-name, .result-item');
       
-      const detailedInfo = await this.extractDetailedInfo(newPage);
+      for (const element of textElements) {
+        const text = element.textContent.trim();
+        
+        if (text.match(/(INC|LTÉE|LTEE|CORP|S\.E\.N\.C)/i) && text.length > 5) {
+          results.push({
+            NEQ: '',
+            name: text,
+            name_official: text,
+            address: '',
+            status: 'Unknown'
+          });
+        }
+      }
       
-      await newPage.close();
-      
-      return {
-        ...basicInfo,
-        ...detailedInfo,
-        source: 'REQ'
-      };
-      
-    } catch (error) {
-      this.options.logger.warn(`Could not get detailed info for ${basicInfo.name}:`, error.message);
-      return basicInfo;
-    }
+      return results;
+    });
+    
+    return pageData;
   }
 
   async extractDetailedInfo(page) {
     const info = await page.evaluate(() => {
       const data = {};
       
-      const getText = (selector) => {
-        const element = document.querySelector(selector);
-        return element ? element.textContent.trim() : null;
+      const getText = (selectors) => {
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (element) return element.textContent.trim();
+        }
+        return null;
       };
       
-      data.NEQ = getText('#CPH_K1ZoneContenu1_Cadr_IdEntreprise span');
-      data.name_official = getText('#CPH_K1ZoneContenu1_Cadr_NomEntreprise span');
+      data.NEQ = getText([
+        '#CPH_K1ZoneContenu1_Cadr_IdEntreprise span',
+        '[data-field="neq"]',
+        '.neq',
+        'span:contains("NEQ")'
+      ]);
       
-      const statusText = getText('#CPH_K1ZoneContenu1_Cadr_StatutEntreprise span');
-      data.status = statusText && (statusText.includes('Immatriculée') || statusText.includes('Active')) ? 'Active' : statusText;
+      data.name_official = getText([
+        '#CPH_K1ZoneContenu1_Cadr_NomEntreprise span',
+        '[data-field="name"]',
+        '.company-name',
+        'h1',
+        'h2'
+      ]);
       
-      data.legal_form = getText('#CPH_K1ZoneContenu1_Cadr_FormeJuridique span');
+      data.status = getText([
+        '#CPH_K1ZoneContenu1_Cadr_StatutEntreprise span',
+        '[data-field="status"]',
+        '.status'
+      ]);
       
-      const addressSections = document.querySelectorAll('.k1-section-adresse');
-      addressSections.forEach(section => {
-        const title = section.querySelector('h3');
-        if (title && title.textContent.includes('Adresse du siège')) {
-          const addressLines = section.querySelectorAll('.k1-ligne-adresse span');
-          const addressParts = [];
-          addressLines.forEach(line => {
-            const text = line.textContent.trim();
-            if (text) addressParts.push(text);
-          });
-          data.head_office_address = addressParts.join(', ');
-        }
-      });
+      data.legal_form = getText([
+        '#CPH_K1ZoneContenu1_Cadr_FormeJuridique span',
+        '[data-field="legal-form"]',
+        '.legal-form'
+      ]);
       
-      data.registration_date = getText('#CPH_K1ZoneContenu1_Cadr_DateImmatriculation span');
+      const addressElements = document.querySelectorAll('.address, .adresse, [data-field="address"]');
+      if (addressElements.length > 0) {
+        const addressParts = [];
+        addressElements.forEach(el => {
+          const text = el.textContent.trim();
+          if (text) addressParts.push(text);
+        });
+        data.head_office_address = addressParts.join(', ');
+      }
+      
+      data.registration_date = getText([
+        '#CPH_K1ZoneContenu1_Cadr_DateImmatriculation span',
+        '[data-field="registration-date"]',
+        '.registration-date'
+      ]);
       
       return data;
     });
@@ -258,60 +459,33 @@ export class REQScraper {
           shareholders_agreement: null
         };
         
-        // Extract sections with ownership info
-        const sections = document.querySelectorAll('section, div[class*="section"]');
+        const allText = document.body.textContent;
         
-        sections.forEach(section => {
-          const sectionText = section.textContent;
-          
-          // Shareholders
-          if (sectionText.includes('Actionnaires')) {
-            const shareholderMatches = sectionText.match(/Nom\s*:\s*([^\n]+)/g);
-            if (shareholderMatches) {
-              shareholderMatches.forEach(match => {
-                const name = match.replace(/Nom\s*:\s*/, '').trim();
-                data.shareholders.push({
-                  name: name,
-                  is_majority: sectionText.includes('majoritaire')
-                });
+        const shareholderMatches = allText.match(/actionnaire[s]?[:\s]+([^\.]+)/gi);
+        if (shareholderMatches) {
+          shareholderMatches.forEach(match => {
+            const name = match.replace(/actionnaire[s]?[:\s]+/i, '').trim();
+            if (name && name.length > 2) {
+              data.shareholders.push({
+                name: name,
+                is_majority: allText.toLowerCase().includes('majoritaire')
               });
             }
-          }
-          
-          // Administrators
-          if (sectionText.includes('Administrateurs')) {
-            const adminMatches = sectionText.match(/Nom de famille\s*:\s*([^\n]+)[\s\S]*?Prénom\s*:\s*([^\n]+)/g);
-            if (adminMatches) {
-              adminMatches.forEach(match => {
-                const parts = match.match(/Nom de famille\s*:\s*([^\n]+)[\s\S]*?Prénom\s*:\s*([^\n]+)/);
-                if (parts) {
-                  data.administrators.push({
-                    last_name: parts[1].trim(),
-                    first_name: parts[2].trim(),
-                    full_name: `${parts[2].trim()} ${parts[1].trim()}`
-                  });
-                }
+          });
+        }
+        
+        const adminMatches = allText.match(/administrateur[s]?[:\s]+([^\.]+)/gi);
+        if (adminMatches) {
+          adminMatches.forEach(match => {
+            const name = match.replace(/administrateur[s]?[:\s]+/i, '').trim();
+            if (name && name.length > 2) {
+              data.administrators.push({
+                full_name: name,
+                position: 'Administrateur'
               });
             }
-          }
-          
-          // Ultimate beneficiaries
-          if (sectionText.includes('Bénéficiaires ultimes')) {
-            const beneficiaryMatches = sectionText.match(/Nom de famille\s*:\s*([^\n]+)[\s\S]*?Prénom\s*:\s*([^\n]+)/g);
-            if (beneficiaryMatches) {
-              beneficiaryMatches.forEach(match => {
-                const parts = match.match(/Nom de famille\s*:\s*([^\n]+)[\s\S]*?Prénom\s*:\s*([^\n]+)/);
-                if (parts) {
-                  data.ultimate_beneficiaries.push({
-                    last_name: parts[1].trim(),
-                    first_name: parts[2].trim(),
-                    full_name: `${parts[2].trim()} ${parts[1].trim()}`
-                  });
-                }
-              });
-            }
-          }
-        });
+          });
+        }
         
         return data;
       });
@@ -330,7 +504,18 @@ export class REQScraper {
   }
 
   async saveSnapshot(identifier, html) {
-    this.options.logger.debug(`Snapshot saved for: ${identifier}`);
+    if (this.options.snapshot) {
+      const fs = await import('fs-extra');
+      const path = await import('path');
+      
+      const filename = `${identifier.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.html`;
+      const filepath = path.join('artifacts', filename);
+      
+      await fs.ensureDir('artifacts');
+      await fs.writeFile(filepath, html);
+      
+      this.options.logger.debug(`Snapshot saved: ${filepath}`);
+    }
   }
 
   async close() {
@@ -340,6 +525,4 @@ export class REQScraper {
       this.context = null;
     }
   }
-
 }
-
