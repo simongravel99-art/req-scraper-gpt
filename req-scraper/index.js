@@ -1,5 +1,6 @@
 import { chromium } from 'playwright';
 import fs from 'fs';
+import path from 'path';
 import { parse } from 'csv-parse';
 import { stringify } from 'csv-stringify';
 import dotenv from 'dotenv';
@@ -12,28 +13,41 @@ const DELAY = Number(process.env.REQUEST_DELAY_MS || 2000);
 const HEADFUL = process.env.HEADFUL === '1';
 const DEBUG = process.env.DEBUG === '1';
 
-
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
 
 async function debugDump(page, tag = '') {
   if (!DEBUG) return;
   try {
     console.log(`[DBG] ${tag} page url: ${page.url()}`);
-    for (const p of page.context().pages()) {
-      console.log('[DBG] ctx page:', p.url());
-    }
-    for (const f of page.frames()) {
-      console.log('[DBG] frame:', f.url());
-    }
+    for (const p of page.context().pages()) console.log('[DBG] ctx page:', p.url());
+    for (const f of page.frames()) console.log('[DBG] frame:', f.url());
   } catch (e) {
     console.log('[DBG] debugDump error:', e?.message || e);
   }
 }
 
-
-
+async function saveArtifacts(page, tag = 'artifact') {
+  if (!DEBUG) return;
+  try {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const dir = path.join(process.cwd(), 'artifacts');
+    await fs.promises.mkdir(dir, { recursive: true });
+    // page screenshot + html
+    try { await page.screenshot({ path: path.join(dir, `${ts}-${tag}-page.png`), fullPage: true }); } catch {}
+    try { await fs.promises.writeFile(path.join(dir, `${ts}-${tag}-page.html`), await page.content()); } catch {}
+    // frames
+    let idx = 0;
+    for (const f of page.frames()) {
+      const fname = `${ts}-${tag}-frame-${idx++}`;
+      try { await f.screenshot({ path: path.join(dir, `${fname}.png`), fullPage: true }); } catch {}
+      try { await fs.promises.writeFile(path.join(dir, `${fname}.html`), await f.content()); } catch {}
+    }
+    console.log(`[DBG] saved artifacts to ${dir}`);
+  } catch (e) {
+    console.log('[DBG] saveArtifacts error:', e?.message || e);
+  }
+}
 
 async function launchBrowser() {
   const proxy = process.env.PROXY_SERVER ? {
@@ -58,12 +72,10 @@ async function clickAcceder(page) {
     if (await loc.count()) {
       const [popup, newPage] = await Promise.all([
         page.waitForEvent('popup').catch(() => null),          // target=_blank flow
-        page.context().waitForEvent('page').catch(() => null), // sometimes opens a new page (same tab stays idle)
+        page.context().waitForEvent('page').catch(() => null), // sometimes opens a new page
         loc.first().click()
       ]);
       const svc = popup || newPage || page;
-
-      // some flows land on an intermediate message; allow a short settle
       await svc.waitForLoadState('domcontentloaded').catch(() => {});
       await svc.waitForTimeout(800);
       return svc;
@@ -72,31 +84,37 @@ async function clickAcceder(page) {
   return page;
 }
 
+// Search for a company using the scoped REGQ form (page + iframes)
 async function searchCompany(page, company) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(1200); // let iframes attach
   await debugDump(page, 'before search');
 
-  // Probe page + all frames
   const contexts = [page, ...page.frames()];
 
-  // Find the real REGQ search form: it has a Rechercher button
-  let form = null, formCtx = null;
+  // Dismiss cookie / modal if shown anywhere
+  for (const ctx of contexts) {
+    const cookieBtn = ctx.getByRole('button', { name: /j.?accepte|accepter|ok|d'accord|continue/i });
+    if (await cookieBtn.count()) { try { await cookieBtn.first().click({ timeout: 800 }); } catch {} }
+  }
 
+  // Find the real REGQ search form: it has a "Rechercher" submit
+  let form = null;
   outerForm:
   for (const ctx of contexts) {
     const candidates = ctx.locator('form');
     const n = await candidates.count();
-    for (let i = 0; i < Math.min(n, 10); i++) {
+    for (let i = 0; i < Math.min(n, 12); i++) {
       const f = candidates.nth(i);
-      const hasBtn = await f.getByRole('button', { name: /rechercher/i }).count()
-        || await f.locator('button:has-text("Rechercher")').count()
-        || await f.locator('input[type="submit"][value*="Rechercher" i]').count();
-      if (hasBtn) { form = f; formCtx = ctx; break outerForm; }
+      const hasBtn = (await f.getByRole('button', { name: /rechercher/i }).count()) ||
+                     (await f.locator('button:has-text("Rechercher")').count()) ||
+                     (await f.locator('input[type="submit"][value*="Rechercher" i]').count());
+      if (hasBtn) { form = f; break outerForm; }
     }
   }
   if (!form) {
     await debugDump(page, 'search form not found');
+    await saveArtifacts(page, 'no-form');
     throw new Error('Search form not found');
   }
 
@@ -124,64 +142,146 @@ async function searchCompany(page, company) {
   }
   if (!box) {
     await debugDump(page, 'search box not found (form-scoped)');
+    await saveArtifacts(page, 'no-box');
     throw new Error('Search box not found (form)');
   }
 
   await box.fill('');
   await box.type(company, { delay: 20 });
 
-  // Click the Rechercher INSIDE the form
+  // Click the Rechercher INSIDE the form (or press Enter fallback)
   let searchBtn =
       form.getByRole('button', { name: /rechercher/i }).first();
   if (!await searchBtn.count())
       searchBtn = form.locator('button:has-text("Rechercher")').first();
   if (!await searchBtn.count())
       searchBtn = form.locator('input[type="submit"][value*="Rechercher" i]').first();
-  if (!await searchBtn.count()) {
-    await debugDump(page, 'rechercher button not found (form-scoped)');
-    throw new Error('Rechercher button not found');
+
+  if (await searchBtn.count()) {
+    await searchBtn.click();
+  } else {
+    // Fallback: submit via Enter
+    await box.press('Enter');
   }
 
-  await searchBtn.click();
   await page.waitForLoadState('networkidle').catch(() => {});
-  // small settle
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(800); // settle
 }
 
-
+// Find and click "Consulter" for the best-matching row; return the destination page (or null)
 async function openResult(page, company) {
+  // small settle after submission / navigation
+  await page.waitForTimeout(1000);
+
+  // Refresh contexts after potential navigation
   const contexts = [page, ...page.frames()];
-  const nameRe = new RegExp(escRe(company), 'i');
 
-  // Wait briefly for results or a "no result" message anywhere
-  const waited = await Promise.race(
-    contexts.map(ctx => ctx.locator('a:has-text("Consulter"), button:has-text("Consulter")').first().waitFor({ timeout: 4000 }).then(() => 'hasConsulter').catch(() => null))
-  ).catch(() => null);
+  // Normalize company name for fuzzy matching
+  const target = company.normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 
-  // If no quick signal, still proceed to search manually
+  // Check "no result" anywhere
   for (const ctx of contexts) {
-    // If there's an explicit "no result" message, bail early
-    const noRes = await ctx.locator(':text-matches("aucun résultat|aucune entreprise", "i")').first().count();
-    if (noRes) return false;
+    const noRes = await ctx.locator(':text-matches("aucun résultat|aucune entreprise|aucun enregistrement", "i")').first().count();
+    if (noRes) return null;
+  }
 
-    // Prefer a row that contains the company name, then click its Consulter
-    const rows = ctx.locator('section, article, li, tr, div').filter({ hasText: nameRe });
-    const rc = await rows.count();
-    for (let i = 0; i < Math.min(rc, 20); i++) {
-      const row = rows.nth(i);
-      const consulter = row.locator('a:has-text("Consulter"), button:has-text("Consulter")').first();
-      if (await consulter.count()) { await consulter.click(); return true; }
+  const rowSelectors = [
+    'table tbody tr',
+    'section:has-text("Résultats") table tbody tr',
+    'article:has-text("Résultats") table tbody tr',
+    'ul li',
+    'div[class*="result"] table tbody tr',
+  ];
+
+  const actionSelectors = [
+    'a:has-text("Consulter")',
+    'button:has-text("Consulter")',
+    'a[title*="Consulter" i]',
+    'a[aria-label*="Consulter" i]',
+    'a:has-text("Voir la fiche")',
+    'a:has-text("Voir")',
+    'a:has-text("Détails")',
+    'button:has-text("Voir")',
+    'button:has-text("Détails")',
+  ];
+
+  // Pass 1: best-matching row then its action
+  for (const ctx of contexts) {
+    for (const rowsSel of rowSelectors) {
+      const rows = ctx.locator(rowsSel);
+      const count = await rows.count();
+      if (!count) continue;
+
+      for (let i = 0; i < Math.min(count, 50); i++) {
+        const row = rows.nth(i);
+        const text = (await row.innerText().catch(() => '')).normalize('NFD')
+          .replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!text) continue;
+
+        const words = target.split(' ').filter(Boolean);
+        const ok = words.length > 1 ? words.every(w => text.includes(w)) : text.includes(target);
+        if (!ok) continue;
+
+        for (const aSel of actionSelectors) {
+          const act = row.locator(aSel).first();
+          if (await act.count()) {
+            const [popup, newPage] = await Promise.all([
+              page.waitForEvent('popup').catch(() => null),
+              page.context().waitForEvent('page').catch(() => null),
+              act.click()
+            ]);
+            const dest = popup || newPage || page;
+            await dest.waitForLoadState('domcontentloaded').catch(() => {});
+            await dest.waitForTimeout(500);
+            return dest;
+          }
+        }
+      }
     }
+  }
 
-    // Fallback: first Consulter anywhere
-    const any = ctx.locator('a:has-text("Consulter"), button:has-text("Consulter")').first();
-    if (await any.count()) { await any.click(); return true; }
+  // Pass 2: first available action anywhere
+  for (const ctx of contexts) {
+    for (const aSel of actionSelectors) {
+      const any = ctx.locator(aSel).first();
+      if (await any.count()) {
+        const [popup, newPage] = await Promise.all([
+          page.waitForEvent('popup').catch(() => null),
+          page.context().waitForEvent('page').catch(() => null),
+          any.click()
+        ]);
+        const dest = popup || newPage || page;
+        await dest.waitForLoadState('domcontentloaded').catch(() => {});
+        await dest.waitForTimeout(500);
+        return dest;
+      }
+    }
   }
 
   await debugDump(page, 'no Consulter found');
-  return false;
+  await saveArtifacts(page, 'no-consulter');
+  return null;
 }
 
+async function getFieldByLabel(page, labels) {
+  for (const label of labels) {
+    const xpath = `//*[normalize-space(text())='${label}']/following-sibling::*[1]`;
+    const el = page.locator(`xpath=${xpath}`).first();
+    if (await el.count()) {
+      const val = (await el.innerText()).trim();
+      if (val) return val;
+    }
+  }
+  for (const label of labels) {
+    const el = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]`).first();
+    if (await el.count()) {
+      const sib = el.locator('xpath=following-sibling::*[1]');
+      if (await sib.count()) return (await sib.innerText()).trim();
+    }
+  }
+  return '';
+}
 
 async function scrapeDetails(page) {
   await page.waitForLoadState('domcontentloaded');
@@ -224,13 +324,17 @@ async function processOne(browser, company) {
   try {
     await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
     await debugDump(page, 'after goto BASE');
+
     const svc = await clickAcceder(page);
     await svc.waitForLoadState('domcontentloaded');
     await debugDump(svc, 'after clickAcceder');
+
     await searchCompany(svc, company);
-    const opened = await openResult(svc, company);
-    if (!opened) throw new Error('No result row to open');
-    const data = await scrapeDetails(svc);
+
+    const dest = await openResult(svc, company);
+    if (!dest) throw new Error('No result row to open');
+
+    const data = await scrapeDetails(dest);
     data.input_company = company;
     return { ok: true, data };
   } catch (e) {
@@ -241,7 +345,6 @@ async function processOne(browser, company) {
     await sleep(DELAY);
   }
 }
-
 
 async function readCompanies(file) {
   if (!file) throw new Error('Provide companies.csv path');
@@ -293,7 +396,3 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
-
-
-
-
