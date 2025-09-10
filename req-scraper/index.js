@@ -23,14 +23,7 @@ async function launchBrowser() {
   return chromium.launch({ headless: !HEADFUL, proxy });
 }
 
-async function clickAcceder(page) {
-  await page.waitForLoadState('domcontentloaded');
-  const acc1 = page.getByRole('link', { name: /accéder au service/i });
-  const acc2 = page.locator('a:has-text("Accéder au service")');
-  if (await acc1.count()) { await acc1.first().click(); return; }
-  if (await acc2.count()) { await acc2.first().click(); return; }
-}
-
+// Click "Accéder au service" and return the correct page (popup or same tab)
 async function clickAcceder(page) {
   await page.waitForLoadState('domcontentloaded');
 
@@ -43,40 +36,59 @@ async function clickAcceder(page) {
   for (const loc of candidates) {
     if (await loc.count()) {
       const [popup] = await Promise.all([
-        page.waitForEvent('popup').catch(() => null), // some versions open in a new tab
+        page.waitForEvent('popup').catch(() => null),
         loc.first().click()
       ]);
-      return popup || page; // use the popup if it opened, otherwise stay
+      return popup || page;
     }
   }
   return page;
 }
 
+async function searchCompany(page, company) {
+  await page.waitForLoadState('domcontentloaded');
 
-  // Accept terms
-  const tos = page.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
-  if (await tos.count()) {
-    try { await tos.check({ force: true }); } catch {}
-  } else {
-    const cb = page.locator('input[type="checkbox"]');
-    if (await cb.count()) { try { await cb.first().check({ force: true }); } catch {} }
+  // 1) Accept terms (try page, then any iframe)
+  let tos = page.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
+  if (!await tos.count()) tos = page.locator('input[type="checkbox"]');
+  if (!await tos.count()) {
+    for (const f of page.frames()) {
+      let fcb = f.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
+      if (!await fcb.count()) fcb = f.locator('input[type="checkbox"]');
+      if (await fcb.count()) { tos = fcb; break; }
+    }
   }
+  if (await tos.count()) { try { await tos.first().check({ force: true }); } catch {} }
 
-  // Search input
+  // 2) Find search input (page or iframe)
   let box = page.getByRole('textbox', { name: /nom.*entreprise|nom/i }).first();
   if (!await box.count()) box = page.locator('form:has-text("Rechercher une entreprise") input[type="text"]').first();
   if (!await box.count()) box = page.locator('input[type="text"]').first();
 
+  if (!await box.count()) {
+    for (const f of page.frames()) {
+      let fbox = f.getByRole('textbox', { name: /nom.*entreprise|nom/i }).first();
+      if (!await fbox.count()) fbox = f.locator('form:has-text("Rechercher une entreprise") input[type="text"]').first();
+      if (!await fbox.count()) fbox = f.locator('input[type="text"]').first();
+      if (await fbox.count()) { box = fbox; break; }
+    }
+  }
+
   await box.fill('');
   await box.type(company, { delay: 20 });
 
-  // Click Rechercher
-  const searchBtn = page.getByRole('button', { name: /rechercher/i }).first();
-  if (await searchBtn.count()) {
-    await searchBtn.click();
-  } else {
-    await page.locator('button:has-text("Rechercher")').first().click();
+  // 3) Click Rechercher (page or iframe)
+  let searchBtn = page.getByRole('button', { name: /rechercher/i }).first();
+  if (!await searchBtn.count()) searchBtn = page.locator('button:has-text("Rechercher")').first();
+  if (!await searchBtn.count()) {
+    for (const f of page.frames()) {
+      let fbtn = f.getByRole('button', { name: /rechercher/i }).first();
+      if (!await fbtn.count()) fbtn = f.locator('button:has-text("Rechercher")').first();
+      if (await fbtn.count()) { searchBtn = fbtn; break; }
+    }
   }
+
+  await searchBtn.click();
   await page.waitForLoadState('networkidle');
 }
 
@@ -99,7 +111,6 @@ async function openResult(page, company) {
 }
 
 async function getFieldByLabel(page, labels) {
-  // exact label → next element
   for (const label of labels) {
     const xpath = `//*[normalize-space(text())='${label}']/following-sibling::*[1]`;
     const el = page.locator(`xpath=${xpath}`).first();
@@ -108,7 +119,6 @@ async function getFieldByLabel(page, labels) {
       if (val) return val;
     }
   }
-  // fuzzy: contains(label) → next sibling
   for (const label of labels) {
     const el = page.locator(`xpath=//*[contains(normalize-space(.), '${label}')]`).first();
     if (await el.count()) {
@@ -154,9 +164,9 @@ async function processOne(browser, company) {
   try {
     await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    const svc = await clickAcceder(page);      // ← use returned page
+    const svc = await clickAcceder(page);
     await svc.waitForLoadState('domcontentloaded');
-    await searchCompany(svc, company);         // ← operate on svc
+    await searchCompany(svc, company);
     const opened = await openResult(svc, company);
     if (!opened) throw new Error('No result row to open');
     const data = await scrapeDetails(svc);
@@ -171,14 +181,11 @@ async function processOne(browser, company) {
   }
 }
 
-
 async function readCompanies(file) {
   if (!file) throw new Error('Provide companies.csv path');
   const rows = await fs.promises.readFile(file, 'utf8');
-  // Allow either CSV or plain newline list
   const lines = rows.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
   if (lines.length === 1 && lines[0].includes(',')) {
-    // CSV mode
     return new Promise((resolve, reject) => {
       const names = [];
       parse(rows, {}, (err, out) => {
@@ -224,4 +231,3 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
-
