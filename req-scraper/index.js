@@ -31,8 +31,27 @@ async function clickAcceder(page) {
   if (await acc2.count()) { await acc2.first().click(); return; }
 }
 
-async function searchCompany(page, company) {
+async function clickAcceder(page) {
   await page.waitForLoadState('domcontentloaded');
+
+  const candidates = [
+    page.getByRole('link', { name: /accéder au service/i }),
+    page.getByRole('button', { name: /accéder au service/i }),
+    page.locator('a:has-text("Accéder au service"), button:has-text("Accéder au service")'),
+  ];
+
+  for (const loc of candidates) {
+    if (await loc.count()) {
+      const [popup] = await Promise.all([
+        page.waitForEvent('popup').catch(() => null), // some versions open in a new tab
+        loc.first().click()
+      ]);
+      return popup || page; // use the popup if it opened, otherwise stay
+    }
+  }
+  return page;
+}
+
 
   // Accept terms
   const tos = page.getByLabel(/je reconnais.*conditions.*(service|en ligne)/i);
@@ -134,12 +153,13 @@ async function processOne(browser, company) {
   const page = await ctx.newPage();
   try {
     await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await clickAcceder(page);
-    await page.waitForLoadState('domcontentloaded');
-    await searchCompany(page, company);
-    const opened = await openResult(page, company);
+
+    const svc = await clickAcceder(page);      // ← use returned page
+    await svc.waitForLoadState('domcontentloaded');
+    await searchCompany(svc, company);         // ← operate on svc
+    const opened = await openResult(svc, company);
     if (!opened) throw new Error('No result row to open');
-    const data = await scrapeDetails(page);
+    const data = await scrapeDetails(svc);
     data.input_company = company;
     return { ok: true, data };
   } catch (e) {
@@ -150,6 +170,7 @@ async function processOne(browser, company) {
     await sleep(DELAY);
   }
 }
+
 
 async function readCompanies(file) {
   if (!file) throw new Error('Provide companies.csv path');
@@ -203,3 +224,4 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
+
