@@ -187,59 +187,63 @@ async function searchCompany(page, company) {
 
 // Find and click "Consulter" for the best-matching row; return the destination page (or null)
 async function openResult(page, company) {
-  // small settle after submission / navigation
+  // Small settle after submission / navigation
   await page.waitForTimeout(1000);
 
   // Refresh contexts after potential navigation
   const contexts = [page, ...page.frames()];
 
-  // Normalize company name for fuzzy matching
+  // Normalize name for accent-insensitive, fuzzy matching
   const target = company.normalize('NFD').replace(/\p{Diacritic}/gu, '')
     .replace(/[^a-z0-9 ]/gi, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 
-  // Check "no result" anywhere
+  // Fast “no result” check anywhere
   for (const ctx of contexts) {
     const noRes = await ctx.locator(':text-matches("aucun résultat|aucune entreprise|aucun enregistrement", "i")').first().count();
     if (noRes) return null;
   }
 
+  // Likely containers for rows
   const rowSelectors = [
     'table tbody tr',
     'section:has-text("Résultats") table tbody tr',
     'article:has-text("Résultats") table tbody tr',
-    'ul li',
     'div[class*="result"] table tbody tr',
+    'ul li'
   ];
 
+  // Action variants
   const actionSelectors = [
     'a:has-text("Consulter")',
     'button:has-text("Consulter")',
     'a[title*="Consulter" i]',
     'a[aria-label*="Consulter" i]',
+    'a:has(img[alt*="Consulter" i])',
     'a:has-text("Voir la fiche")',
     'a:has-text("Voir")',
     'a:has-text("Détails")',
     'button:has-text("Voir")',
-    'button:has-text("Détails")',
+    'button:has-text("Détails")'
   ];
 
-  // Pass 1: best-matching row then its action
+  // PASS 1 — find a row containing the company name; click its action (or first link)
   for (const ctx of contexts) {
     for (const rowsSel of rowSelectors) {
       const rows = ctx.locator(rowsSel);
       const count = await rows.count();
       if (!count) continue;
 
-      for (let i = 0; i < Math.min(count, 60); i++) {
+      for (let i = 0; i < Math.min(count, 80); i++) {
         const row = rows.nth(i);
         const text = (await row.innerText().catch(() => '')).normalize('NFD')
           .replace(/\p{Diacritic}/gu, '').replace(/\s+/g, ' ').trim().toLowerCase();
         if (!text) continue;
 
         const words = target.split(' ').filter(Boolean);
-        const ok = words.length > 1 ? words.every(w => text.includes(w)) : text.includes(target);
-        if (!ok) continue;
+        const matchesCompany = words.length > 1 ? words.every(w => text.includes(w)) : text.includes(target);
+        if (!matchesCompany) continue;
 
+        // Prefer explicit “Consulter/…” inside this row
         for (const aSel of actionSelectors) {
           const act = row.locator(aSel).first();
           if (await act.count()) {
@@ -254,11 +258,25 @@ async function openResult(page, company) {
             return dest;
           }
         }
+
+        // Fallback in the matched row: click the first link (often the company name)
+        const firstLink = row.locator('a').first();
+        if (await firstLink.count()) {
+          const [popup, newPage] = await Promise.all([
+            page.waitForEvent('popup').catch(() => null),
+            page.context().waitForEvent('page').catch(() => null),
+            firstLink.click()
+          ]);
+          const dest = popup || newPage || page;
+          await dest.waitForLoadState('domcontentloaded').catch(() => {});
+          await dest.waitForTimeout(500);
+          return dest;
+        }
       }
     }
   }
 
-  // Pass 2: first available action anywhere
+  // PASS 2 — no name match; try the first action anywhere
   for (const ctx of contexts) {
     for (const aSel of actionSelectors) {
       const any = ctx.locator(aSel).first();
@@ -276,10 +294,27 @@ async function openResult(page, company) {
     }
   }
 
-  await debugDump(page, 'no Consulter found');
-  await saveArtifacts(page, 'no-consulter');
+  // PASS 3 — absolute fallback: first link in a results table
+  for (const ctx of contexts) {
+    const firstRowLink = ctx.locator('table tbody tr a').first();
+    if (await firstRowLink.count()) {
+      const [popup, newPage] = await Promise.all([
+        page.waitForEvent('popup').catch(() => null),
+        page.context().waitForEvent('page').catch(() => null),
+        firstRowLink.click()
+      ]);
+      const dest = popup || newPage || page;
+      await dest.waitForLoadState('domcontentloaded').catch(() => {});
+      await dest.waitForTimeout(500);
+      return dest;
+    }
+  }
+
+  await debugDump(page, 'no action found in results');
+  await saveArtifacts(page, 'no-action');
   return null;
 }
+
 
 async function getFieldByLabel(page, labels) {
   for (const label of labels) {
@@ -412,3 +447,4 @@ async function writeCsv(records) {
     process.exit(1);
   }
 })();
+
