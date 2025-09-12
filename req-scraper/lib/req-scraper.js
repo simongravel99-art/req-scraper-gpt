@@ -48,15 +48,14 @@ export class REQScraper {
       launchOptions.proxy = this.parseProxy(this.options.proxy);
     }
     
-    this.browser = await chromium.launch(launchOptions);
-    this.context = await this.browser.newContext({
-      viewport: { width: 1920, height: 1080 },
-      userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Session-${this.sessionCounter}`,
-      locale: 'fr-CA',
-      timezoneId: 'America/Montreal'
-    });
-  }
-
+ this.browser = await chromium.launch(launchOptions);
+this.context = await this.browser.newContext({
+  viewport: { width: 1920, height: 1080 },
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+  locale: 'fr-CA',
+  timezoneId: 'America/Montreal'
+});
+    
   parseProxy(proxyUrl) {
     const url = new URL(proxyUrl);
     return {
@@ -526,3 +525,4 @@ export class REQScraper {
     }
   }
 }
+
