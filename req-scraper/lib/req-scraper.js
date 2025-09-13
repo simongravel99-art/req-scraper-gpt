@@ -178,20 +178,42 @@ export class REQScraper {
   }
 
   async performSearch(companyName) {
-    const page = await this.context.newPage();
+    let page = await this.context.newPage();
     const startTime = Date.now();
 
     try {
-      this.options.logger.debug(`Navigating to REQ search page`);
+      this.options.logger.debug(`Navigating to Quebec.ca REQ landing page`);
 
-      // Navigate to search page
+      // First navigate to Quebec.ca landing page
       await page.goto('https://www.quebec.ca/entreprises-et-travailleurs-autonomes/obtenir-renseignements-entreprise/recherche-registre-entreprises/acceder-registre-entreprises', {
         waitUntil: 'networkidle',
         timeout: 60000
       });
 
-      // Extended wait for page load to appear more human-like
-      this.options.logger.debug(`Waiting ${this.options.pageLoadDelay}ms for page to fully load...`);
+      await setTimeout(3000); // Brief wait for page to stabilize
+
+      // Click the "Accéder au service" button to get to the actual REQ portal
+      this.options.logger.debug(`Clicking "Accéder au service" button...`);
+
+      // Find the specific button for company search
+      const accessButton = await page.locator('a[href*="choixdomaine=RegistreEntreprisesQuebec"]').first();
+      await accessButton.scrollIntoViewIfNeeded();
+
+      // Since this opens in a new tab, we need to handle the new page
+      const [newPage] = await Promise.all([
+        this.context.waitForEvent('page'),
+        accessButton.click()
+      ]);
+
+      // Switch to the new page and wait for it to load
+      await newPage.waitForLoadState('networkidle');
+      await page.close(); // Close the old page
+
+      // Use the new page for the rest of the process
+      page = newPage; // Reassign page variable
+
+      // Extended wait for REQ portal to fully load
+      this.options.logger.debug(`Waiting ${this.options.pageLoadDelay}ms for REQ portal to fully load...`);
       await page.waitForTimeout(this.options.pageLoadDelay);
 
       // Find search input
@@ -199,6 +221,16 @@ export class REQScraper {
       if (!searchInput) {
         throw new Error('Could not find search input field');
       }
+
+      // First, find and check the terms and conditions checkbox
+      this.options.logger.debug(`Looking for terms and conditions checkbox...`);
+
+      const termsCheckbox = await page.locator('input[type="checkbox"]').first();
+      await termsCheckbox.scrollIntoViewIfNeeded();
+      await termsCheckbox.check();
+
+      this.options.logger.debug(`Terms checkbox checked, proceeding with search...`);
+      await page.waitForTimeout(1000); // Wait after checkbox
 
       // Fill search form with human-like delays
       await searchInput.click();
@@ -220,6 +252,7 @@ export class REQScraper {
       // Extended wait for results to load
       this.options.logger.debug(`Waiting for search results to load...`);
       await page.waitForTimeout(5000 + Math.random() * 3000);
+
 
       // Parse results
       const results = await this.parseSearchResults(page);
@@ -255,22 +288,34 @@ export class REQScraper {
   }
 
   async findSearchInput(page) {
+    // Based on the PDF, the REQ portal has specific selectors
     const selectors = [
+      // REQ portal specific selectors (from PDF analysis)
+      'input[name*="entreprise"]',
+      'input[name*="Entreprise"]',
+      'input[placeholder*="entreprise"]',
+      'input[placeholder*="nom"]',
+      // General fallback selectors
       'input[name*="nom"]',
       'input[id*="nom"]',
-      'input[placeholder*="nom"]',
       'input[name*="Nom"]',
       'input[id*="Nom"]',
       '#ctl00_cphK1ZoneContenu1_txtNomEntreprise',
+      // Very generic fallbacks
+      'input[type="text"]:not([style*="display: none"])',
       'input[type="text"]'
     ];
 
     for (const selector of selectors) {
       try {
-        const input = await page.waitForSelector(selector, { timeout: 2000 });
+        const input = await page.waitForSelector(selector, { timeout: 3000 });
         if (input) {
-          this.options.logger.debug(`Found search input with selector: ${selector}`);
-          return input;
+          // Verify the input is visible and not hidden
+          const isVisible = await input.isVisible();
+          if (isVisible) {
+            this.options.logger.debug(`Found search input with selector: ${selector}`);
+            return input;
+          }
         }
       } catch (e) {
         continue;
@@ -281,23 +326,32 @@ export class REQScraper {
   }
 
   async submitSearch(page, searchInput) {
-    // Try different submission methods
+    // Based on the PDF, the REQ portal has a blue "Rechercher" button
     const submitSelectors = [
+      // REQ portal specific selectors
+      'button:has-text("Rechercher")',
+      'input[value="Rechercher"]',
+      'input[value*="Rechercher"]',
+      'button[value*="Rechercher"]',
+      // Generic submit selectors
       'input[type="submit"]',
       'button[type="submit"]',
       'input[name*="Rechercher"]',
-      'input[value*="Rechercher"]',
-      'button:has-text("Rechercher")',
-      '.btn-submit'
+      '.btn-submit',
+      '.button-primary',
+      'button.btn'
     ];
 
     for (const selector of submitSelectors) {
       try {
         const button = await page.$(selector);
         if (button) {
-          this.options.logger.debug(`Submitting with selector: ${selector}`);
-          await button.click();
-          return;
+          const isVisible = await button.isVisible();
+          if (isVisible) {
+            this.options.logger.debug(`Submitting with selector: ${selector}`);
+            await button.click();
+            return;
+          }
         }
       } catch (e) {
         continue;
@@ -315,6 +369,7 @@ export class REQScraper {
       ':has-text("Aucun résultat")',
       ':has-text("aucune entreprise")',
       ':has-text("0 résultat")',
+      ':has-text("Aucune correspondance")',
       '.no-results'
     ];
 
@@ -330,21 +385,38 @@ export class REQScraper {
       }
     }
 
-    // Look for result rows
+    // Based on the PDF, results appear in a table format
     const resultSelectors = [
+      // REQ portal specific result selectors
+      'table tbody tr',
       'table.rgMasterTable tbody tr',
       '.rgRow, .rgAltRow',
-      'table tbody tr',
+      'div[id*="resultats"] table tr',
+      'div[id*="results"] table tr',
+      // Generic result selectors
       '.result-row',
-      'tr:has(td)'
+      'tr:has(td)',
+      'tbody tr'
     ];
 
     for (const selector of resultSelectors) {
       try {
         const rows = await page.$$(selector);
         if (rows.length > 0) {
-          this.options.logger.debug(`Found ${rows.length} result rows with selector: ${selector}`);
-          return await this.extractResultData(page, selector);
+          // Filter out header rows and empty rows
+          const dataRows = [];
+          for (const row of rows) {
+            const hasData = await row.$('td');
+            const isHeader = await row.$('th');
+            if (hasData && !isHeader) {
+              dataRows.push(row);
+            }
+          }
+
+          if (dataRows.length > 0) {
+            this.options.logger.debug(`Found ${dataRows.length} data rows with selector: ${selector}`);
+            return await this.extractResultData(page, selector);
+          }
         }
       } catch (e) {
         continue;
