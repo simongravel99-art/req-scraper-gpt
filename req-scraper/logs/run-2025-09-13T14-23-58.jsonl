@@ -1,0 +1,12 @@
+{"level":"info","time":"2025-09-13T14:23:58.798Z","pid":194152,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T14-23-58.jsonl"}
+{"level":"info","time":"2025-09-13T14:23:58.804Z","pid":194152,"hostname":"srv996050","companiesCsv":"entreprises.csv","nameColumn":"0","limit":2,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-13T14:23:58.805Z","pid":194152,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-13T14:23:58.805Z","pid":194152,"hostname":"srv996050","msg":"Loaded 2 companies from text list"}
+{"level":"debug","time":"2025-09-13T14:23:58.884Z","pid":194152,"hostname":"srv996050","msg":"Initialized browser with viewport: 1920x1080, UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0..."}
+{"level":"info","time":"2025-09-13T14:23:58.884Z","pid":194152,"hostname":"srv996050","msg":"Processing company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T14:23:58.884Z","pid":194152,"hostname":"srv996050","msg":"Starting search for company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T14:23:58.884Z","pid":194152,"hostname":"srv996050","msg":"Stealth delay: 16473ms"}
+{"level":"debug","time":"2025-09-13T14:24:15.405Z","pid":194152,"hostname":"srv996050","msg":"Navigating to REQ search page"}
+{"level":"debug","time":"2025-09-13T14:24:17.303Z","pid":194152,"hostname":"srv996050","msg":"Waiting 8000ms for page to fully load..."}
+{"level":"error","time":"2025-09-13T14:24:39.394Z","pid":194152,"hostname":"srv996050","type":"failure_artifact","url":"search-PLACEMENTS DVV INC.","htmlPath":"debug/failures/2025-09-13T14-24-39-search-PLACEMENTS-DVV-INC-.html","screenshotPath":"2025-09-13T14-24-39-search-PLACEMENTS-DVV-INC-.png","error":{"error":"Could not find search input field","elapsedMs":23908},"msg":"Failure artifact saved"}
+{"level":"warn","time":"2025-09-13T14:24:39.398Z","pid":194152,"hostname":"srv996050","msg":"Search failed, retrying in 691.7345269979825ms: Could not find search input field"}

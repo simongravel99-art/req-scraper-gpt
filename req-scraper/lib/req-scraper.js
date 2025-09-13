@@ -36,8 +36,7 @@ export class REQScraper {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-        `--user-data-dir=/tmp/chrome-session-${this.sessionCounter}`
+        '--disable-blink-features=AutomationControlled'
       ]
     };
 
@@ -186,7 +185,7 @@ export class REQScraper {
       this.options.logger.debug(`Navigating to REQ search page`);
 
       // Navigate to search page
-      await page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnttr_PC/PageRechercheEntreprise.aspx', {
+      await page.goto('https://www.quebec.ca/entreprises-et-travailleurs-autonomes/obtenir-renseignements-entreprise/recherche-registre-entreprises/acceder-registre-entreprises', {
         waitUntil: 'networkidle',
         timeout: 60000
       });

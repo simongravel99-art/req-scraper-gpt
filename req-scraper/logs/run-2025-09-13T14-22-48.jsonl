@@ -1,0 +1,2 @@
+{"level":"info","time":"2025-09-13T14:22:48.748Z","pid":193926,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T14-22-48.jsonl"}
+{"level":"info","time":"2025-09-13T14:22:48.751Z","pid":193926,"hostname":"srv996050","companiesCsv":"entreprises.csv","nameColumn":"0","limit":5,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}

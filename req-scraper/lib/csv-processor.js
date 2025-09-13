@@ -15,6 +15,16 @@ export class CSVProcessor {
     try {
       const csvContent = await fs.readFile(csvPath, this.options.encoding);
 
+      // Check if this is a simple text list (no commas) or actual CSV
+      const lines = csvContent.split(/\r?\n/);
+      const hasCommas = lines.some(line => line.includes(','));
+
+      if (!hasCommas) {
+        // Handle as simple text list
+        this.options.logger.info(`Processing as simple text list (no CSV structure detected)`);
+        return this.processTextList(lines, limit);
+      }
+
       return new Promise((resolve, reject) => {
         const companies = [];
         const parser = parse({
@@ -74,6 +84,31 @@ export class CSVProcessor {
       this.options.logger.error(`Failed to read CSV file: ${error.message}`);
       throw error;
     }
+  }
+
+  processTextList(lines, limit = null) {
+    const companies = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+
+      // Skip empty lines or lines that are too short
+      if (!line || line.length < 3) continue;
+
+      companies.push({
+        name: line,
+        originalRow: [line],
+        rowIndex: i
+      });
+
+      // Apply limit if specified
+      if (limit && companies.length >= limit) {
+        break;
+      }
+    }
+
+    this.options.logger.info(`Loaded ${companies.length} companies from text list`);
+    return companies;
   }
 
   extractCompanyName(record) {
