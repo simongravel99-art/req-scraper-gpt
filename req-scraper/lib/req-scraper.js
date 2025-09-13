@@ -1,520 +1,625 @@
 import { chromium } from 'playwright';
 import pLimit from 'p-limit';
 import { setTimeout } from 'timers/promises';
+import leven from 'leven';
 
 export class REQScraper {
   constructor(options = {}) {
     this.options = {
       headless: true,
-      timeout: options.timeout || 30000,
-      rateLimit: options.rateLimit || 1000,
+      timeout: options.timeout || 60000,
+      rateLimit: options.rateLimit || 20000, // Much slower for stealth
+      pageLoadDelay: options.pageLoadDelay || 8000,
+      formInteractionDelay: options.formInteractionDelay || 3000,
       maxRetries: 3,
-      snapshot: options.snapshot || false,
-      proxy: options.proxy,
+      debug: options.debug || false,
       logger: options.logger || console,
-      extractOwnership: options.extractOwnership !== false
+      requestLayer: options.requestLayer
     };
-    
+
     this.browser = null;
     this.context = null;
     this.rateLimiter = pLimit(1);
     this.lastRequestTime = 0;
     this.retryDelays = [500, 1500, 3500];
-    this.sessionCounter = 0; // For forcing proxy rotation
+    this.sessionCounter = 0;
   }
 
-  async initialize(forceNewSession = false) {
-    // Force new browser session for proxy rotation
-    if (this.browser && forceNewSession) {
-      await this.close();
-    }
-    
+  async initialize() {
     if (this.browser) return;
-    
+
     this.sessionCounter++;
-    
+
     const launchOptions = {
       headless: this.options.headless,
       args: [
-        '--no-sandbox', 
+        '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-blink-features=AutomationControlled',
-        `--user-data-dir=/tmp/chrome-session-${this.sessionCounter}` // Force new session
+        `--user-data-dir=/tmp/chrome-session-${this.sessionCounter}`
       ]
     };
-    
-    if (this.options.proxy) {
-      launchOptions.proxy = this.parseProxy(this.options.proxy);
-    }
-    
- this.browser = await chromium.launch(launchOptions);
-this.context = await this.browser.newContext({
-  viewport: { width: 1920, height: 1080 },
-  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
-  locale: 'fr-CA',
-  timezoneId: 'America/Montreal'
-});
-    
-  parseProxy(proxyUrl) {
-    const url = new URL(proxyUrl);
-    return {
-      server: `${url.protocol}//${url.hostname}:${url.port}`,
-      username: url.username || undefined,
-      password: url.password || undefined
-    };
-  }
 
-  async enforceRateLimit() {
-    const now = Date.now();
-    const timeSinceLastRequest = now - this.lastRequestTime;
-    
-    if (timeSinceLastRequest < this.options.rateLimit) {
-      await setTimeout(this.options.rateLimit - timeSinceLastRequest);
-    }
-    
-    this.lastRequestTime = Date.now();
-  }
+    this.browser = await chromium.launch(launchOptions);
 
-  async checkIPAndAccess() {
-    const page = await this.context.newPage();
-    try {
-      // Check current IP
-      await page.goto('https://httpbin.org/ip', { waitUntil: 'networkidle', timeout: 10000 });
-      const ipResponse = await page.textContent('body');
-      const currentIP = JSON.parse(ipResponse).origin;
-      this.options.logger.info(`Using IP: ${currentIP}`);
-      
-      // Test Quebec site accessibility
-      await page.goto('https://www.registreentreprises.gouv.qc.ca/REQNA/GR/GR03/GR03A71.RechercheRegistre.MVC/GR03A71', {
-        waitUntil: 'networkidle',
-        timeout: 15000
-      });
-      
-      const content = await page.textContent('body');
-      const isBlocked = content.includes('temporairement interdit');
-      
-      if (isBlocked) {
-        this.options.logger.warn(`IP ${currentIP} is blocked, attempting rotation...`);
-        await page.close();
-        return false;
+    // Randomize viewport for stealth
+    const viewports = [
+      { width: 1920, height: 1080 },
+      { width: 1366, height: 768 },
+      { width: 1440, height: 900 },
+      { width: 1536, height: 864 }
+    ];
+    const viewport = viewports[Math.floor(Math.random() * viewports.length)];
+
+    // Randomize user agent
+    const userAgents = [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0'
+    ];
+    const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
+
+    this.context = await this.browser.newContext({
+      viewport,
+      userAgent,
+      locale: 'fr-CA',
+      timezoneId: 'America/Montreal',
+      // Additional stealth settings
+      extraHTTPHeaders: {
+        'Accept-Language': 'fr-CA,fr;q=0.9,en;q=0.8',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Upgrade-Insecure-Requests': '1'
       }
-      
-      this.options.logger.info(`IP ${currentIP} is accessible`);
-      await page.close();
-      return true;
-      
-    } catch (error) {
-      this.options.logger.error(`IP check failed: ${error.message}`);
-      await page.close();
-      return false;
+    });
+
+    if (this.options.debug) {
+      this.options.logger.debug(`Initialized browser with viewport: ${viewport.width}x${viewport.height}, UA: ${userAgent.substring(0, 50)}...`);
     }
   }
 
-  async search(companyName, attempt = 0) {
-    // Initialize with potential proxy rotation
-    await this.initialize(attempt > 0);
-    
+  async searchAndScrapeCompany(companyName) {
+    try {
+      this.options.logger.debug(`Starting search for company: ${companyName}`);
+
+      // Perform search
+      const searchResults = await this.searchCompany(companyName);
+
+      if (searchResults.length === 0) {
+        return {
+          status: 'not_found',
+          reason: 'No search results found',
+          searchQuery: companyName
+        };
+      }
+
+      // Apply matching logic
+      const bestMatch = this.selectBestMatch(companyName, searchResults);
+
+      if (bestMatch.status === 'ambiguous') {
+        return {
+          status: 'ambiguous',
+          searchQuery: companyName,
+          matches: searchResults
+        };
+      }
+
+      // Scrape detailed information
+      const detailedInfo = await this.scrapeCompanyDetails(bestMatch.match);
+
+      return {
+        status: 'success',
+        data: {
+          search_query: companyName,
+          match_confidence: bestMatch.confidence,
+          ...detailedInfo
+        }
+      };
+
+    } catch (error) {
+      this.options.logger.error(`Failed to process company ${companyName}: ${error.message}`);
+
+      return {
+        status: 'error',
+        reason: error.message,
+        searchQuery: companyName
+      };
+    }
+  }
+
+  async searchCompany(companyName, attempt = 0) {
+    await this.initialize();
+
     return this.rateLimiter(async () => {
       await this.enforceRateLimit();
-      
+
       try {
-        // Check if current IP is accessible before searching
-        const isAccessible = await this.checkIPAndAccess();
-        if (!isAccessible && attempt < this.options.maxRetries) {
-          // Force new session to get new IP
-          await this.close();
-          const delay = this.retryDelays[attempt] + (Math.random() * 5000); // Add randomness
-          this.options.logger.warn(`Rotating proxy and retrying in ${delay}ms...`);
-          await setTimeout(delay);
-          return this.search(companyName, attempt + 1);
-        }
-        
-        if (!isAccessible) {
-          throw new Error('All IPs blocked, cannot access Quebec registry');
-        }
-        
         return await this.performSearch(companyName);
       } catch (error) {
         if (attempt < this.options.maxRetries) {
-          const delay = this.retryDelays[attempt];
-          this.options.logger.warn(`REQ search failed, retrying in ${delay}ms...`, error.message);
+          const delay = this.retryDelays[attempt] + Math.random() * 1000;
+          this.options.logger.warn(`Search failed, retrying in ${delay}ms: ${error.message}`);
           await setTimeout(delay);
-          return this.search(companyName, attempt + 1);
+          return this.searchCompany(companyName, attempt + 1);
         }
         throw error;
       }
     });
   }
 
+  async enforceRateLimit() {
+    const now = Date.now();
+    const timeSinceLastRequest = now - this.lastRequestTime;
+
+    // Add significant random delay for stealth (15-25 seconds)
+    const minDelay = 15000;
+    const maxDelay = 25000;
+    const randomDelay = minDelay + Math.random() * (maxDelay - minDelay);
+
+    const requiredDelay = Math.max(
+      this.options.rateLimit - timeSinceLastRequest,
+      randomDelay
+    );
+
+    if (requiredDelay > 0) {
+      if (this.options.debug) {
+        this.options.logger.debug(`Stealth delay: ${Math.round(requiredDelay)}ms`);
+      }
+      await setTimeout(requiredDelay);
+    }
+
+    this.lastRequestTime = Date.now();
+  }
+
   async performSearch(companyName) {
     const page = await this.context.newPage();
-    page.setDefaultTimeout(this.options.timeout);
-    
+    const startTime = Date.now();
+
     try {
-      // Go directly to the enterprise search page
-      await page.goto('https://www.registreentreprises.gouv.qc.ca/REQNA/GR/GR03/GR03A71.RechercheRegistre.MVC/GR03A71', {
+      this.options.logger.debug(`Navigating to REQ search page`);
+
+      // Navigate to search page
+      await page.goto('https://www.registreentreprises.gouv.qc.ca/RQAnonymeGR/GR/GR03/GR03A2_19A_PIU_RechEnttr_PC/PageRechercheEntreprise.aspx', {
         waitUntil: 'networkidle',
         timeout: 60000
       });
-      
-      // Double-check we're not blocked
-      const content = await page.textContent('body');
-      if (content.includes('temporairement interdit')) {
-        throw new Error('IP blocked during search');
-      }
-      
-      // Wait for page to fully load
-      await page.waitForTimeout(3000);
-      
-      // Look for the search form - try multiple possible selectors
-      const searchSelectors = [
-        'input[name="Nom"]',
-        'input[placeholder*="nom"]',
-        'input[type="text"]',
-        '#Nom',
-        '[data-testid="search-input"]'
-      ];
-      
-      let searchInput = null;
-      for (const selector of searchSelectors) {
-        try {
-          searchInput = await page.waitForSelector(selector, { timeout: 5000 });
-          if (searchInput) {
-            this.options.logger.debug(`Found search input with selector: ${selector}`);
-            break;
-          }
-        } catch (e) {
-          continue;
-        }
-      }
-      
+
+      // Extended wait for page load to appear more human-like
+      this.options.logger.debug(`Waiting ${this.options.pageLoadDelay}ms for page to fully load...`);
+      await page.waitForTimeout(this.options.pageLoadDelay);
+
+      // Find search input
+      const searchInput = await this.findSearchInput(page);
       if (!searchInput) {
-        searchInput = await page.$('input[type="text"]');
+        throw new Error('Could not find search input field');
       }
-      
-      if (!searchInput) {
-        throw new Error('Search input field not found');
-      }
-      
-      // Clear and fill the search field
+
+      // Fill search form with human-like delays
       await searchInput.click();
-      await searchInput.clear();
+      await page.waitForTimeout(500 + Math.random() * 1000); // Random delay after click
+
+      // Clear field slowly and fill character by character for stealth
+      await searchInput.selectText();
+      await page.waitForTimeout(200);
       await searchInput.fill(companyName);
-      
-      // Look for and click submit button
-      const submitSelectors = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:has-text("Rechercher")',
-        'input[value*="Rechercher"]',
-        '.btn-primary',
-        '[data-testid="search-button"]'
-      ];
-      
-      let submitButton = null;
-      for (const selector of submitSelectors) {
-        try {
-          submitButton = await page.$(selector);
-          if (submitButton) {
-            this.options.logger.debug(`Found submit button with selector: ${selector}`);
-            break;
-          }
-        } catch (e) {
-          continue;
-        }
-      }
-      
-      if (!submitButton) {
-        await searchInput.press('Enter');
-      } else {
-        await submitButton.click();
-      }
-      
-      // Wait for results to load
-      await page.waitForTimeout(5000);
-      
-      // Try to detect if we have results
-      const resultSelectors = [
-        'table tbody tr',
-        '.result-row',
-        '.search-result',
-        '[data-testid="result-row"]',
-        'tr:has(td)',
-        '.table tr'
-      ];
-      
-      let results = [];
-      for (const selector of resultSelectors) {
-        try {
-          const rows = await page.$$(selector);
-          if (rows.length > 0) {
-            this.options.logger.debug(`Found ${rows.length} result rows with selector: ${selector}`);
-            results = await this.parseSearchResultsWithSelector(page, selector);
-            break;
-          }
-        } catch (e) {
-          continue;
-        }
-      }
-      
-      if (results.length === 0) {
-        const linkSelectors = [
-          'a:has-text("Consulter")',
-          'button:has-text("Consulter")',
-          'a[href*="NEQ"]',
-          'a[href*="entreprise"]',
-          '.action-link'
-        ];
-        
-        for (const selector of linkSelectors) {
-          try {
-            const links = await page.$$(selector);
-            if (links.length > 0) {
-              this.options.logger.debug(`Found ${links.length} action links with selector: ${selector}`);
-              results = await this.extractBasicInfoFromPage(page, links);
-              break;
-            }
-          } catch (e) {
-            continue;
-          }
-        }
-      }
-      
-      if (results.length === 0) {
-        if (this.options.snapshot) {
-          const html = await page.content();
-          await this.saveSnapshot(`no-results-${companyName}`, html);
-        }
-        this.options.logger.warn(`No results found for ${companyName}`);
-        return [];
-      }
-      
+
+      // Wait before submitting to simulate human behavior
+      await page.waitForTimeout(this.options.formInteractionDelay);
+
+      this.options.logger.debug(`Searching for: ${companyName}`);
+
+      // Submit search
+      await this.submitSearch(page, searchInput);
+
+      // Extended wait for results to load
+      this.options.logger.debug(`Waiting for search results to load...`);
+      await page.waitForTimeout(5000 + Math.random() * 3000);
+
+      // Parse results
+      const results = await this.parseSearchResults(page);
+
+      const elapsedMs = Date.now() - startTime;
+      this.options.logger.debug(`Search completed in ${elapsedMs}ms, found ${results.length} results`);
+
       return results;
-      
+
     } catch (error) {
-      this.options.logger.error(`Error searching REQ for ${companyName}:`, error);
-      
-      if (this.options.snapshot) {
+      const elapsedMs = Date.now() - startTime;
+
+      // Save failure artifact if debugging
+      if (this.options.debug) {
         try {
           const html = await page.content();
-          await this.saveSnapshot(`error-${companyName}`, html);
+          const screenshot = await page.screenshot({ type: 'png' });
+          await this.options.logger.saveFailureArtifact(
+            `search-${companyName}`,
+            html,
+            screenshot,
+            { error: error.message, elapsedMs }
+          );
         } catch (e) {
-          // Ignore snapshot errors
+          // Ignore artifact save errors
         }
       }
-      
+
       throw error;
     } finally {
       await page.close();
     }
   }
 
-  async parseSearchResultsWithSelector(page, selector) {
+  async findSearchInput(page) {
+    const selectors = [
+      'input[name*="nom"]',
+      'input[id*="nom"]',
+      'input[placeholder*="nom"]',
+      'input[name*="Nom"]',
+      'input[id*="Nom"]',
+      '#ctl00_cphK1ZoneContenu1_txtNomEntreprise',
+      'input[type="text"]'
+    ];
+
+    for (const selector of selectors) {
+      try {
+        const input = await page.waitForSelector(selector, { timeout: 2000 });
+        if (input) {
+          this.options.logger.debug(`Found search input with selector: ${selector}`);
+          return input;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  async submitSearch(page, searchInput) {
+    // Try different submission methods
+    const submitSelectors = [
+      'input[type="submit"]',
+      'button[type="submit"]',
+      'input[name*="Rechercher"]',
+      'input[value*="Rechercher"]',
+      'button:has-text("Rechercher")',
+      '.btn-submit'
+    ];
+
+    for (const selector of submitSelectors) {
+      try {
+        const button = await page.$(selector);
+        if (button) {
+          this.options.logger.debug(`Submitting with selector: ${selector}`);
+          await button.click();
+          return;
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    // Fall back to Enter key
+    this.options.logger.debug('Falling back to Enter key submission');
+    await searchInput.press('Enter');
+  }
+
+  async parseSearchResults(page) {
+    // Check for "no results" message first
+    const noResultsSelectors = [
+      ':has-text("Aucun résultat")',
+      ':has-text("aucune entreprise")',
+      ':has-text("0 résultat")',
+      '.no-results'
+    ];
+
+    for (const selector of noResultsSelectors) {
+      try {
+        const element = await page.$(selector);
+        if (element) {
+          this.options.logger.debug('No results message found');
+          return [];
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    // Look for result rows
+    const resultSelectors = [
+      'table.rgMasterTable tbody tr',
+      '.rgRow, .rgAltRow',
+      'table tbody tr',
+      '.result-row',
+      'tr:has(td)'
+    ];
+
+    for (const selector of resultSelectors) {
+      try {
+        const rows = await page.$$(selector);
+        if (rows.length > 0) {
+          this.options.logger.debug(`Found ${rows.length} result rows with selector: ${selector}`);
+          return await this.extractResultData(page, selector);
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    return [];
+  }
+
+  async extractResultData(page, selector) {
     return await page.evaluate((sel) => {
       const rows = document.querySelectorAll(sel);
       const results = [];
-      
+
       for (const row of rows) {
-        if (row.querySelector('th')) continue;
-        
+        // Skip header rows
+        if (row.querySelector('th') || row.textContent.includes('Nom de l\'entreprise')) {
+          continue;
+        }
+
         const cells = row.querySelectorAll('td');
         if (cells.length === 0) continue;
-        
-        let neq = '', name = '', address = '';
-        
+
+        // Extract data from cells
+        const data = {
+          NEQ: '',
+          name: '',
+          status: '',
+          address: '',
+          detailUrl: ''
+        };
+
+        // Look for NEQ (usually first column or contains digits)
         for (let i = 0; i < cells.length; i++) {
           const cellText = cells[i].textContent.trim();
-          
+
           if (/^\d{10}/.test(cellText)) {
-            neq = cellText;
-          }
-          
-          if (cellText.length > name.length && !cellText.match(/^\d/) && cellText.length > 10) {
-            name = cellText;
-          }
-          
-          if (cellText.includes('RUE') || cellText.includes('AVENUE') || cellText.includes('BOULEVARD')) {
-            address = cellText;
+            data.NEQ = cellText;
           }
         }
-        
-        if (name) {
-          results.push({
-            NEQ: neq,
-            name: name,
-            name_official: name,
-            address: address,
-            status: 'Unknown'
-          });
+
+        // Look for company name (usually longest text)
+        let longestText = '';
+        for (let i = 0; i < cells.length; i++) {
+          const cellText = cells[i].textContent.trim();
+
+          if (cellText.length > longestText.length &&
+              !cellText.match(/^\d/) &&
+              cellText.length > 3) {
+            longestText = cellText;
+          }
+        }
+        data.name = longestText;
+
+        // Look for status
+        for (let i = 0; i < cells.length; i++) {
+          const cellText = cells[i].textContent.trim().toLowerCase();
+
+          if (cellText.includes('active') ||
+              cellText.includes('inactive') ||
+              cellText.includes('radiée') ||
+              cellText.includes('immatriculée')) {
+            data.status = cells[i].textContent.trim();
+            break;
+          }
+        }
+
+        // Look for detail link
+        const detailLink = row.querySelector('a[href*="Consulter"], a[href*="NEQ"]');
+        if (detailLink) {
+          data.detailUrl = detailLink.href;
+        }
+
+        // Only add if we found a name
+        if (data.name) {
+          results.push(data);
         }
       }
-      
+
       return results;
     }, selector);
   }
 
-  async extractBasicInfoFromPage(page, actionLinks) {
-    const results = [];
-    
-    const pageData = await page.evaluate(() => {
-      const results = [];
-      
-      const textElements = document.querySelectorAll('td, .company-name, .result-item');
-      
-      for (const element of textElements) {
-        const text = element.textContent.trim();
-        
-        if (text.match(/(INC|LTÉE|LTEE|CORP|S\.E\.N\.C)/i) && text.length > 5) {
-          results.push({
-            NEQ: '',
-            name: text,
-            name_official: text,
-            address: '',
-            status: 'Unknown'
-          });
-        }
-      }
-      
-      return results;
+  selectBestMatch(searchQuery, results) {
+    if (results.length === 0) {
+      return { status: 'not_found' };
+    }
+
+    if (results.length === 1) {
+      return {
+        status: 'success',
+        match: results[0],
+        confidence: 1.0
+      };
+    }
+
+    // Calculate match scores
+    const scored = results.map(result => {
+      const score = this.calculateMatchScore(searchQuery, result);
+      return { ...result, matchScore: score };
     });
-    
-    return pageData;
+
+    // Sort by score (higher is better)
+    scored.sort((a, b) => b.matchScore - a.matchScore);
+
+    const bestScore = scored[0].matchScore;
+    const secondBestScore = scored.length > 1 ? scored[1].matchScore : 0;
+
+    // If the best match is significantly better, use it
+    if (bestScore > 0.8 && (bestScore - secondBestScore) > 0.2) {
+      return {
+        status: 'success',
+        match: scored[0],
+        confidence: bestScore
+      };
+    }
+
+    // Otherwise, it's ambiguous
+    return {
+      status: 'ambiguous',
+      matches: scored.slice(0, 5) // Return top 5 matches
+    };
+  }
+
+  calculateMatchScore(searchQuery, result) {
+    const queryNorm = this.normalizeCompanyName(searchQuery);
+    const resultNorm = this.normalizeCompanyName(result.name);
+
+    let score = 0;
+
+    // Exact match
+    if (queryNorm === resultNorm) {
+      score += 1.0;
+    } else {
+      // Levenshtein distance (lower is better)
+      const distance = leven(queryNorm, resultNorm);
+      const maxLen = Math.max(queryNorm.length, resultNorm.length);
+      const similarity = 1 - (distance / maxLen);
+      score += similarity * 0.8;
+    }
+
+    // Bonus for active companies
+    if (result.status && result.status.toLowerCase().includes('active')) {
+      score += 0.1;
+    }
+
+    // Bonus if searchQuery is contained in result
+    if (resultNorm.includes(queryNorm)) {
+      score += 0.1;
+    }
+
+    return Math.min(score, 1.0);
+  }
+
+  normalizeCompanyName(name) {
+    if (!name) return '';
+
+    return name
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .replace(/[^\w\s&.-]/g, '')
+      .replace(/\b(INC|LTEE|LTÉE|CORP|S\.E\.N\.C|ENR)\b\.?/g, '')
+      .trim();
+  }
+
+  async scrapeCompanyDetails(company) {
+    if (!company.detailUrl) {
+      // Return basic info if no detail URL
+      return {
+        NEQ: company.NEQ,
+        name_official: company.name,
+        status: company.status,
+        address: company.address || '',
+        scraped_at: new Date().toISOString()
+      };
+    }
+
+    const page = await this.context.newPage();
+    const startTime = Date.now();
+
+    try {
+      this.options.logger.debug(`Scraping details from: ${company.detailUrl}`);
+
+      await page.goto(company.detailUrl, {
+        waitUntil: 'networkidle',
+        timeout: 60000
+      });
+
+      // Extended wait for detail page to load
+      this.options.logger.debug(`Waiting for detail page to fully load...`);
+      await page.waitForTimeout(this.options.pageLoadDelay);
+
+      const details = await this.extractDetailedInfo(page);
+
+      const elapsedMs = Date.now() - startTime;
+      this.options.logger.debug(`Detail scraping completed in ${elapsedMs}ms`);
+
+      return {
+        NEQ: company.NEQ,
+        scraped_at: new Date().toISOString(),
+        ...details
+      };
+
+    } catch (error) {
+      this.options.logger.warn(`Failed to scrape details for ${company.name}: ${error.message}`);
+
+      // Return basic info on failure
+      return {
+        NEQ: company.NEQ,
+        name_official: company.name,
+        status: company.status,
+        scraped_at: new Date().toISOString(),
+        scraping_error: error.message
+      };
+    } finally {
+      await page.close();
+    }
   }
 
   async extractDetailedInfo(page) {
-    const info = await page.evaluate(() => {
+    return await page.evaluate(() => {
       const data = {};
-      
+
       const getText = (selectors) => {
         for (const selector of selectors) {
           const element = document.querySelector(selector);
-          if (element) return element.textContent.trim();
+          if (element) {
+            return element.textContent.trim();
+          }
         }
         return null;
       };
-      
-      data.NEQ = getText([
-        '#CPH_K1ZoneContenu1_Cadr_IdEntreprise span',
-        '[data-field="neq"]',
-        '.neq',
-        'span:contains("NEQ")'
-      ]);
-      
+
+      // Company name
       data.name_official = getText([
-        '#CPH_K1ZoneContenu1_Cadr_NomEntreprise span',
-        '[data-field="name"]',
+        '#ctl00_cphK1ZoneContenu1_lblNomEntreprise',
         '.company-name',
         'h1',
         'h2'
       ]);
-      
+
+      // Status
       data.status = getText([
-        '#CPH_K1ZoneContenu1_Cadr_StatutEntreprise span',
-        '[data-field="status"]',
+        '#ctl00_cphK1ZoneContenu1_lblStatutEntreprise',
         '.status'
       ]);
-      
+
+      // Legal form
       data.legal_form = getText([
-        '#CPH_K1ZoneContenu1_Cadr_FormeJuridique span',
-        '[data-field="legal-form"]',
+        '#ctl00_cphK1ZoneContenu1_lblFormeJuridique',
         '.legal-form'
       ]);
-      
-      const addressElements = document.querySelectorAll('.address, .adresse, [data-field="address"]');
-      if (addressElements.length > 0) {
-        const addressParts = [];
-        addressElements.forEach(el => {
-          const text = el.textContent.trim();
-          if (text) addressParts.push(text);
-        });
-        data.head_office_address = addressParts.join(', ');
-      }
-      
+
+      // Registration date
       data.registration_date = getText([
-        '#CPH_K1ZoneContenu1_Cadr_DateImmatriculation span',
-        '[data-field="registration-date"]',
+        '#ctl00_cphK1ZoneContenu1_lblDateImmatriculation',
         '.registration-date'
       ]);
-      
+
+      // Address
+      data.head_office_address = getText([
+        '#ctl00_cphK1ZoneContenu1_lblAdresseSiegeSocial',
+        '.address'
+      ]);
+
+      // Business number
+      data.business_number = getText([
+        '#ctl00_cphK1ZoneContenu1_lblNumeroEntreprise',
+        '.business-number'
+      ]);
+
       return data;
     });
-    
-    if (this.options.extractOwnership) {
-      const ownershipInfo = await this.extractOwnershipInfo(page);
-      return { ...info, ...ownershipInfo };
-    }
-    
-    return info;
-  }
-
-  async extractOwnershipInfo(page) {
-    try {
-      const ownership = await page.evaluate(() => {
-        const data = {
-          shareholders: [],
-          administrators: [],
-          ultimate_beneficiaries: [],
-          shareholders_agreement: null
-        };
-        
-        const allText = document.body.textContent;
-        
-        const shareholderMatches = allText.match(/actionnaire[s]?[:\s]+([^\.]+)/gi);
-        if (shareholderMatches) {
-          shareholderMatches.forEach(match => {
-            const name = match.replace(/actionnaire[s]?[:\s]+/i, '').trim();
-            if (name && name.length > 2) {
-              data.shareholders.push({
-                name: name,
-                is_majority: allText.toLowerCase().includes('majoritaire')
-              });
-            }
-          });
-        }
-        
-        const adminMatches = allText.match(/administrateur[s]?[:\s]+([^\.]+)/gi);
-        if (adminMatches) {
-          adminMatches.forEach(match => {
-            const name = match.replace(/administrateur[s]?[:\s]+/i, '').trim();
-            if (name && name.length > 2) {
-              data.administrators.push({
-                full_name: name,
-                position: 'Administrateur'
-              });
-            }
-          });
-        }
-        
-        return data;
-      });
-      
-      return ownership;
-      
-    } catch (error) {
-      this.options.logger.warn(`Could not extract ownership info:`, error.message);
-      return {
-        shareholders: [],
-        administrators: [],
-        ultimate_beneficiaries: [],
-        shareholders_agreement: null
-      };
-    }
-  }
-
-  async saveSnapshot(identifier, html) {
-    if (this.options.snapshot) {
-      const fs = await import('fs-extra');
-      const path = await import('path');
-      
-      const filename = `${identifier.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.html`;
-      const filepath = path.join('artifacts', filename);
-      
-      await fs.ensureDir('artifacts');
-      await fs.writeFile(filepath, html);
-      
-      this.options.logger.debug(`Snapshot saved: ${filepath}`);
-    }
   }
 
   async close() {
@@ -525,4 +630,3 @@ this.context = await this.browser.newContext({
     }
   }
 }
-
