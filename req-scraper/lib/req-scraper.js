@@ -385,45 +385,89 @@ export class REQScraper {
       }
     }
 
-    // Based on the PDF, results appear in a table format
-    const resultSelectors = [
-      // REQ portal specific result selectors
-      'table tbody tr',
-      'table.rgMasterTable tbody tr',
-      '.rgRow, .rgAltRow',
-      'div[id*="resultats"] table tr',
-      'div[id*="results"] table tr',
-      // Generic result selectors
-      '.result-row',
-      'tr:has(td)',
-      'tbody tr'
+    // NEW APPROACH: Find search result rows with "Consulter" buttons
+    // Based on PDF: each company result has a "Consulter" link/button
+    const consultButtonSelectors = [
+      'a:has-text("Consulter")',
+      'button:has-text("Consulter")',
+      'input[value="Consulter"]',
+      'a[title*="Consulter"]',
+      'a:has-text("Voir")',
+      'a:has-text("Détails")'
     ];
 
-    for (const selector of resultSelectors) {
+    let consultButtons = [];
+    for (const selector of consultButtonSelectors) {
       try {
-        const rows = await page.$$(selector);
-        if (rows.length > 0) {
-          // Filter out header rows and empty rows
-          const dataRows = [];
-          for (const row of rows) {
-            const hasData = await row.$('td');
-            const isHeader = await row.$('th');
-            if (hasData && !isHeader) {
-              dataRows.push(row);
-            }
-          }
-
-          if (dataRows.length > 0) {
-            this.options.logger.debug(`Found ${dataRows.length} data rows with selector: ${selector}`);
-            return await this.extractResultData(page, selector);
-          }
+        const buttons = await page.$$(selector);
+        if (buttons.length > 0) {
+          this.options.logger.debug(`Found ${buttons.length} "Consulter" buttons with selector: ${selector}`);
+          consultButtons = buttons;
+          break;
         }
       } catch (e) {
         continue;
       }
     }
 
-    return [];
+    if (consultButtons.length === 0) {
+      this.options.logger.debug('No "Consulter" buttons found - may be no results or different page structure');
+      return [];
+    }
+
+    // Extract company info from each row to return for matching
+    const results = [];
+    for (let i = 0; i < consultButtons.length; i++) {
+      try {
+        // Find the parent row for this Consulter button
+        const button = consultButtons[i];
+        const row = await button.evaluateHandle(btn => {
+          // Walk up the DOM to find the table row
+          let element = btn;
+          while (element && element.tagName !== 'TR') {
+            element = element.parentElement;
+          }
+          return element;
+        });
+
+        if (row) {
+          // Extract company name and other details from the row
+          const rowText = await row.evaluate(tr => tr.textContent.trim());
+          const cells = await row.$$('td');
+
+          let companyName = '';
+          let NEQ = '';
+
+          // Extract text from each cell
+          for (const cell of cells) {
+            const cellText = await cell.evaluate(td => td.textContent.trim());
+
+            // Look for NEQ (usually 10 digits)
+            if (/^\d{10}/.test(cellText)) {
+              NEQ = cellText;
+            }
+            // Company name is usually the longest text cell that's not a number
+            else if (cellText.length > companyName.length && !/^\d/.test(cellText) && !cellText.includes('Consulter')) {
+              companyName = cellText;
+            }
+          }
+
+          results.push({
+            name: companyName || `Company ${i + 1}`,
+            NEQ: NEQ,
+            rawText: rowText,
+            consultButton: button,
+            index: i
+          });
+        }
+      } catch (e) {
+        this.options.logger.debug(`Error extracting data from result ${i}: ${e.message}`);
+        continue;
+      }
+    }
+
+    this.options.logger.debug(`Parsed ${results.length} company results with Consulter buttons`);
+    return results;
   }
 
   async extractResultData(page, selector) {
@@ -584,36 +628,62 @@ export class REQScraper {
   }
 
   async scrapeCompanyDetails(company) {
-    if (!company.detailUrl) {
-      // Return basic info if no detail URL
+    if (!company.consultButton) {
+      // Return basic info if no Consulter button available
       return {
         NEQ: company.NEQ,
         name_official: company.name,
-        status: company.status,
-        address: company.address || '',
+        status: company.status || '',
         scraped_at: new Date().toISOString()
       };
     }
 
-    const page = await this.context.newPage();
     const startTime = Date.now();
 
     try {
-      this.options.logger.debug(`Scraping details from: ${company.detailUrl}`);
+      this.options.logger.debug(`Clicking "Consulter" button for: ${company.name}`);
 
-      await page.goto(company.detailUrl, {
-        waitUntil: 'networkidle',
-        timeout: 60000
-      });
+      // Click the Consulter button to navigate to detailed page
+      // This might open in the same page or a new tab
+      const [newPage] = await Promise.all([
+        this.context.waitForEvent('page').catch(() => null), // Might not open new page
+        company.consultButton.click()
+      ]);
 
-      // Extended wait for detail page to load
+      // Determine which page to use
+      let detailPage;
+      if (newPage) {
+        // New page opened
+        await newPage.waitForLoadState('networkidle');
+        detailPage = newPage;
+        this.options.logger.debug(`Detail page opened in new tab`);
+      } else {
+        // Same page navigation - find the page that contains the button
+        const allPages = this.context.pages();
+        detailPage = allPages.find(p => p.url().includes('registreentreprises.gouv.qc.ca'));
+        if (detailPage) {
+          await detailPage.waitForLoadState('networkidle');
+          this.options.logger.debug(`Detail page loaded in same tab`);
+        }
+      }
+
+      if (!detailPage) {
+        throw new Error('Could not find detail page after clicking Consulter');
+      }
+
+      // Extended wait for detail page to fully load
       this.options.logger.debug(`Waiting for detail page to fully load...`);
-      await page.waitForTimeout(this.options.pageLoadDelay);
+      await detailPage.waitForTimeout(this.options.pageLoadDelay);
 
-      const details = await this.extractDetailedInfo(page);
+      const details = await this.extractDetailedInfo(detailPage);
 
       const elapsedMs = Date.now() - startTime;
       this.options.logger.debug(`Detail scraping completed in ${elapsedMs}ms`);
+
+      // Close the detail page if it's a new page
+      if (newPage) {
+        await newPage.close();
+      }
 
       return {
         NEQ: company.NEQ,
@@ -628,12 +698,10 @@ export class REQScraper {
       return {
         NEQ: company.NEQ,
         name_official: company.name,
-        status: company.status,
+        status: company.status || '',
         scraped_at: new Date().toISOString(),
         scraping_error: error.message
       };
-    } finally {
-      await page.close();
     }
   }
 
