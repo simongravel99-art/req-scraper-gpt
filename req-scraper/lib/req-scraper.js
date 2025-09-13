@@ -25,10 +25,55 @@ export class REQScraper {
     this.sessionCounter = 0;
   }
 
+  async loadProxy() {
+    // Check if proxy file is specified directly or via requestLayer
+    const proxyFile = this.options.proxyPoolFile || this.requestLayer?.options?.proxyPoolFile;
+    if (!proxyFile) {
+      return null;
+    }
+
+    try {
+      const fs = await import('fs/promises');
+      const content = await fs.readFile(proxyFile, 'utf-8');
+      const lines = content.trim().split('\n').filter(line => line.trim());
+
+      if (lines.length === 0) {
+        return null;
+      }
+
+      // Use the first proxy (could be enhanced to rotate)
+      const proxyUrl = lines[0].trim();
+
+      // Parse proxy URL: http://user:pass@host:port
+      const url = new URL(proxyUrl);
+
+      const proxyConfig = {
+        server: `${url.protocol}//${url.host}`,
+      };
+
+      // Add authentication if present
+      if (url.username && url.password) {
+        proxyConfig.username = url.username;
+        proxyConfig.password = url.password;
+      }
+
+      return proxyConfig;
+
+    } catch (error) {
+      if (this.options.debug) {
+        this.options.logger.warn(`Failed to load proxy: ${error.message}`);
+      }
+      return null;
+    }
+  }
+
   async initialize() {
     if (this.browser) return;
 
     this.sessionCounter++;
+
+    // Load proxy if available
+    const proxy = await this.loadProxy();
 
     const launchOptions = {
       headless: this.options.headless,
@@ -60,7 +105,7 @@ export class REQScraper {
     ];
     const userAgent = userAgents[Math.floor(Math.random() * userAgents.length)];
 
-    this.context = await this.browser.newContext({
+    const contextOptions = {
       viewport,
       userAgent,
       locale: 'fr-CA',
@@ -77,7 +122,17 @@ export class REQScraper {
         'Sec-Fetch-Site': 'none',
         'Upgrade-Insecure-Requests': '1'
       }
-    });
+    };
+
+    // Add proxy configuration if available
+    if (proxy) {
+      contextOptions.proxy = proxy;
+      if (this.options.debug) {
+        this.options.logger.debug(`Using proxy: ${proxy.server}`);
+      }
+    }
+
+    this.context = await this.browser.newContext(contextOptions);
 
     if (this.options.debug) {
       this.options.logger.debug(`Initialized browser with viewport: ${viewport.width}x${viewport.height}, UA: ${userAgent.substring(0, 50)}...`);

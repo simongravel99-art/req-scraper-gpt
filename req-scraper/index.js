@@ -104,7 +104,8 @@ class REQScraperCLI {
         logger,
         debug: options.debug,
         pageLoadDelay: parseInt(process.env.PAGE_LOAD_DELAY_MS) || 8000,
-        formInteractionDelay: parseInt(process.env.FORM_INTERACTION_DELAY_MS) || 3000
+        formInteractionDelay: parseInt(process.env.FORM_INTERACTION_DELAY_MS) || 3000,
+        proxyPoolFile: options.proxyPool || process.env.PROXY_POOL_FILE
       });
 
       await scraper.initialize();
