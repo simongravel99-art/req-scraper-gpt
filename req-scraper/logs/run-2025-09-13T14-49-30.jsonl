@@ -1,0 +1,12 @@
+{"level":"info","time":"2025-09-13T14:49:30.691Z","pid":196401,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T14-49-30.jsonl"}
+{"level":"info","time":"2025-09-13T14:49:30.697Z","pid":196401,"hostname":"srv996050","companiesCsv":"entreprises.csv","nameColumn":"0","limit":1,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-13T14:49:30.698Z","pid":196401,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-13T14:49:30.698Z","pid":196401,"hostname":"srv996050","msg":"Loaded 1 companies from text list"}
+{"level":"debug","time":"2025-09-13T14:49:30.762Z","pid":196401,"hostname":"srv996050","msg":"Initialized browser with viewport: 1366x768, UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb..."}
+{"level":"info","time":"2025-09-13T14:49:30.763Z","pid":196401,"hostname":"srv996050","msg":"Processing company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T14:49:30.763Z","pid":196401,"hostname":"srv996050","msg":"Starting search for company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T14:49:30.763Z","pid":196401,"hostname":"srv996050","msg":"Stealth delay: 20207ms"}
+{"level":"debug","time":"2025-09-13T14:49:51.020Z","pid":196401,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-13T14:49:56.145Z","pid":196401,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"error","time":"2025-09-13T14:50:26.348Z","pid":196401,"hostname":"srv996050","type":"failure_artifact","url":"search-PLACEMENTS DVV INC.","htmlPath":"debug/failures/2025-09-13T14-50-26-search-PLACEMENTS-DVV-INC-.html","screenshotPath":"2025-09-13T14-50-26-search-PLACEMENTS-DVV-INC-.png","error":{"error":"page.waitForURL: Timeout 30000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation to \"**/registreentreprises.gouv.qc.ca/**\" until \"load\"\n============================================================","elapsedMs":35243},"msg":"Failure artifact saved"}
+{"level":"warn","time":"2025-09-13T14:50:26.359Z","pid":196401,"hostname":"srv996050","msg":"Search failed, retrying in 1443.4311934253492ms: page.waitForURL: Timeout 30000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation to \"**/registreentreprises.gouv.qc.ca/**\" until \"load\"\n============================================================"}

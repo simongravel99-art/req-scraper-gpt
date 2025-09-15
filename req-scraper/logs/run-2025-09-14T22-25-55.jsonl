@@ -1,0 +1,52 @@
+{"level":"info","time":"2025-09-14T22:25:55.471Z","pid":220039,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-14T22-25-55.jsonl"}
+{"level":"info","time":"2025-09-14T22:25:55.478Z","pid":220039,"hostname":"srv996050","companiesCsv":"single-test.csv","nameColumn":"0","limit":1,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-14T22:25:55.479Z","pid":220039,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-14T22:25:55.479Z","pid":220039,"hostname":"srv996050","msg":"Loaded 1 companies from text list"}
+{"level":"info","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"Loaded 1 proxies from proxies.txt"}
+{"level":"debug","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"CLI options.proxyPool: proxies.txt"}
+{"level":"debug","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"process.env.PROXY_POOL_FILE: proxies.txt"}
+{"level":"debug","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"Final proxyPoolFile: proxies.txt"}
+{"level":"debug","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"All options: [\"headless\",\"timeout\",\"rateLimit\",\"pageLoadDelay\",\"formInteractionDelay\",\"maxRetries\",\"debug\",\"logger\",\"requestLayer\",\"proxyPoolFile\"]"}
+{"level":"debug","time":"2025-09-14T22:25:55.480Z","pid":220039,"hostname":"srv996050","msg":"Attempting to load proxy from: proxies.txt"}
+{"level":"debug","time":"2025-09-14T22:25:55.482Z","pid":220039,"hostname":"srv996050","msg":"Loading proxy from proxies.txt: http://simongravel99_gmail_com:***@la.residential.rayobyte.com:8000"}
+{"level":"debug","time":"2025-09-14T22:25:55.482Z","pid":220039,"hostname":"srv996050","msg":"Proxy result: {\"server\":\"http://la.residential.rayobyte.com:8000\",\"username\":\"simongravel99_gmail_com\",\"password\":\"Canisius2025\"}"}
+{"level":"debug","time":"2025-09-14T22:25:55.557Z","pid":220039,"hostname":"srv996050","msg":"Using proxy: http://la.residential.rayobyte.com:8000"}
+{"level":"debug","time":"2025-09-14T22:25:55.566Z","pid":220039,"hostname":"srv996050","msg":"Initialized browser with viewport: 1366x768, UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb..."}
+{"level":"info","time":"2025-09-14T22:25:55.567Z","pid":220039,"hostname":"srv996050","msg":"Processing company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T22:25:55.567Z","pid":220039,"hostname":"srv996050","msg":"Starting search for company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T22:25:55.568Z","pid":220039,"hostname":"srv996050","msg":"Stealth delay: 17383ms"}
+{"level":"debug","time":"2025-09-14T22:26:12.990Z","pid":220039,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-14T22:26:21.731Z","pid":220039,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-14T22:26:26.862Z","pid":220039,"hostname":"srv996050","msg":"New page loaded successfully"}
+{"level":"debug","time":"2025-09-14T22:26:26.876Z","pid":220039,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"debug","time":"2025-09-14T22:26:34.912Z","pid":220039,"hostname":"srv996050","msg":"Found search input with selector: #Objet"}
+{"level":"debug","time":"2025-09-14T22:26:34.913Z","pid":220039,"hostname":"srv996050","msg":"Looking for terms and conditions checkbox..."}
+{"level":"debug","time":"2025-09-14T22:26:34.997Z","pid":220039,"hostname":"srv996050","msg":"Terms checkbox checked, proceeding with search..."}
+{"level":"debug","time":"2025-09-14T22:26:39.753Z","pid":220039,"hostname":"srv996050","msg":"Searching for: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T22:26:39.760Z","pid":220039,"hostname":"srv996050","msg":"Submitting with selector: button:has-text(\"Rechercher\")"}
+{"level":"debug","time":"2025-09-14T22:26:40.556Z","pid":220039,"hostname":"srv996050","msg":"Waiting for search results to load..."}
+{"level":"debug","time":"2025-09-14T22:26:43.556Z","pid":220039,"hostname":"srv996050","msg":"Waiting for either results or no-results message..."}
+{"level":"debug","time":"2025-09-14T22:26:53.557Z","pid":220039,"hostname":"srv996050","msg":"No specific results elements found within timeout, proceeding anyway: page.waitForSelector: Timeout 10000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('span:has-text(\"Consulter\")') to be visible\u001b[22m\n"}
+{"level":"error","time":"2025-09-14T22:26:55.595Z","pid":220039,"hostname":"srv996050","type":"failure_artifact","url":"results-page-PLACEMENTS DVV INC.","htmlPath":"debug/failures/2025-09-14T22-26-55-results-page-PLACEMENTS-DVV-INC-.html","screenshotPath":"2025-09-14T22-26-55-results-page-PLACEMENTS-DVV-INC-.png","error":{"note":"Results page capture for debugging","elapsedMs":42604},"msg":"Failure artifact saved"}
+{"level":"debug","time":"2025-09-14T22:26:55.595Z","pid":220039,"hostname":"srv996050","msg":"Saved results page HTML for analysis"}
+{"level":"debug","time":"2025-09-14T22:26:55.601Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: span:has-text(\"Consulter\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.603Z","pid":220039,"hostname":"srv996050","msg":"Selector span:has-text(\"Consulter\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.604Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: span[aria-hidden=\"true\"]:has-text(\"Consulter\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.605Z","pid":220039,"hostname":"srv996050","msg":"Selector span[aria-hidden=\"true\"]:has-text(\"Consulter\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.605Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: button:has-text(\"Consulter\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.607Z","pid":220039,"hostname":"srv996050","msg":"Selector button:has-text(\"Consulter\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.607Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: a:has-text(\"Consulter\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.608Z","pid":220039,"hostname":"srv996050","msg":"Selector a:has-text(\"Consulter\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.608Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: input[value=\"Consulter\"]"}
+{"level":"debug","time":"2025-09-14T22:26:55.610Z","pid":220039,"hostname":"srv996050","msg":"Selector input[value=\"Consulter\"] found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.610Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: a[title*=\"Consulter\"]"}
+{"level":"debug","time":"2025-09-14T22:26:55.611Z","pid":220039,"hostname":"srv996050","msg":"Selector a[title*=\"Consulter\"] found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.611Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: a:has-text(\"Voir\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.613Z","pid":220039,"hostname":"srv996050","msg":"Selector a:has-text(\"Voir\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.613Z","pid":220039,"hostname":"srv996050","msg":"Trying selector: a:has-text(\"Détails\")"}
+{"level":"debug","time":"2025-09-14T22:26:55.614Z","pid":220039,"hostname":"srv996050","msg":"Selector a:has-text(\"Détails\") found 0 elements"}
+{"level":"debug","time":"2025-09-14T22:26:55.614Z","pid":220039,"hostname":"srv996050","msg":"No \"Consulter\" buttons found - may be no results or different page structure"}
+{"level":"debug","time":"2025-09-14T22:26:55.614Z","pid":220039,"hostname":"srv996050","msg":"Search completed in 42624ms, found 0 results"}
+{"level":"warn","time":"2025-09-14T22:26:55.619Z","pid":220039,"hostname":"srv996050","msg":"Failed to process PLACEMENTS DVV INC.: No search results found"}
+{"level":"info","time":"2025-09-14T22:26:55.621Z","pid":220039,"hostname":"srv996050","msg":"Wrote 0 results to output/req_results.jsonl"}
+{"level":"info","time":"2025-09-14T22:26:55.658Z","pid":220039,"hostname":"srv996050","type":"summary","duration_ms":60189,"duration_human":"1m 0s","pages":{"attempted":0,"succeeded":0,"failed":0,"success_rate":"0%"},"blocks":{"403":0,"429":0,"5xx":0},"block_rate":"0%","retries":0,"avg_latency_ms":0,"output_rows":0,"ambiguous_matches":0,"msg":"Scraping session summary"}

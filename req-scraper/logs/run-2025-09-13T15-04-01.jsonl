@@ -1,0 +1,22 @@
+{"level":"info","time":"2025-09-13T15:04:01.651Z","pid":198003,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T15-04-01.jsonl"}
+{"level":"info","time":"2025-09-13T15:04:01.657Z","pid":198003,"hostname":"srv996050","companiesCsv":"business-test.csv","nameColumn":"0","limit":1,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-13T15:04:01.658Z","pid":198003,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-13T15:04:01.658Z","pid":198003,"hostname":"srv996050","msg":"Loaded 1 companies from text list"}
+{"level":"info","time":"2025-09-13T15:04:01.658Z","pid":198003,"hostname":"srv996050","msg":"Loaded 1 proxies from proxies.txt"}
+{"level":"debug","time":"2025-09-13T15:04:01.735Z","pid":198003,"hostname":"srv996050","msg":"Initialized browser with viewport: 1920x1080, UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Ap..."}
+{"level":"info","time":"2025-09-13T15:04:01.735Z","pid":198003,"hostname":"srv996050","msg":"Processing company: HYDRO-QUEBEC"}
+{"level":"debug","time":"2025-09-13T15:04:01.736Z","pid":198003,"hostname":"srv996050","msg":"Starting search for company: HYDRO-QUEBEC"}
+{"level":"debug","time":"2025-09-13T15:04:01.736Z","pid":198003,"hostname":"srv996050","msg":"Stealth delay: 23483ms"}
+{"level":"debug","time":"2025-09-13T15:04:25.269Z","pid":198003,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-13T15:04:29.993Z","pid":198003,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-13T15:04:31.461Z","pid":198003,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"debug","time":"2025-09-13T15:05:06.487Z","pid":198003,"hostname":"srv996050","msg":"Found search input with selector: input[type=\"text\"]:not([style*=\"display: none\"])"}
+{"level":"debug","time":"2025-09-13T15:05:06.487Z","pid":198003,"hostname":"srv996050","msg":"Looking for terms and conditions checkbox..."}
+{"level":"debug","time":"2025-09-13T15:05:06.547Z","pid":198003,"hostname":"srv996050","msg":"Terms checkbox checked, proceeding with search..."}
+{"level":"debug","time":"2025-09-13T15:05:11.420Z","pid":198003,"hostname":"srv996050","msg":"Searching for: HYDRO-QUEBEC"}
+{"level":"debug","time":"2025-09-13T15:05:11.426Z","pid":198003,"hostname":"srv996050","msg":"Submitting with selector: button:has-text(\"Rechercher\")"}
+{"level":"debug","time":"2025-09-13T15:05:11.538Z","pid":198003,"hostname":"srv996050","msg":"Waiting for search results to load..."}
+{"level":"debug","time":"2025-09-13T15:05:16.781Z","pid":198003,"hostname":"srv996050","msg":"Search completed in 51512ms, found 0 results"}
+{"level":"warn","time":"2025-09-13T15:05:16.783Z","pid":198003,"hostname":"srv996050","msg":"Failed to process HYDRO-QUEBEC: No search results found"}
+{"level":"info","time":"2025-09-13T15:05:16.787Z","pid":198003,"hostname":"srv996050","msg":"Wrote 0 results to output/req_results.jsonl"}
+{"level":"info","time":"2025-09-13T15:05:16.824Z","pid":198003,"hostname":"srv996050","type":"summary","duration_ms":75175,"duration_human":"1m 15s","pages":{"attempted":0,"succeeded":0,"failed":0,"success_rate":"0%"},"blocks":{"403":0,"429":0,"5xx":0},"block_rate":"0%","retries":0,"avg_latency_ms":0,"output_rows":0,"ambiguous_matches":0,"msg":"Scraping session summary"}

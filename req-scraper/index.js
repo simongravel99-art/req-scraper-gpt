@@ -98,6 +98,13 @@ class REQScraperCLI {
       // Initialize request layer
       await requestLayer.initialize();
 
+      // Debug proxy option passing
+      if (options.debug) {
+        logger.debug(`CLI options.proxyPool: ${options.proxyPool}`);
+        logger.debug(`process.env.PROXY_POOL_FILE: ${process.env.PROXY_POOL_FILE}`);
+        logger.debug(`Final proxyPoolFile: ${options.proxyPool || process.env.PROXY_POOL_FILE}`);
+      }
+
       // Initialize scraper with stealth settings
       const scraper = new REQScraper({
         requestLayer,

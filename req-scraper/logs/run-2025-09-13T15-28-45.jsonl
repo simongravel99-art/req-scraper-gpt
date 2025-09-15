@@ -1,0 +1,29 @@
+{"level":"info","time":"2025-09-13T15:28:45.763Z","pid":200568,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T15-28-45.jsonl"}
+{"level":"info","time":"2025-09-13T15:28:45.771Z","pid":200568,"hostname":"srv996050","companiesCsv":"entreprises.csv","nameColumn":"0","limit":10,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-13T15:28:45.772Z","pid":200568,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-13T15:28:45.772Z","pid":200568,"hostname":"srv996050","msg":"Loaded 10 companies from text list"}
+{"level":"info","time":"2025-09-13T15:28:45.772Z","pid":200568,"hostname":"srv996050","msg":"Loaded 1 proxies from proxies.txt"}
+{"level":"debug","time":"2025-09-13T15:28:45.861Z","pid":200568,"hostname":"srv996050","msg":"Initialized browser with viewport: 1366x768, UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb..."}
+{"level":"info","time":"2025-09-13T15:28:45.861Z","pid":200568,"hostname":"srv996050","msg":"Processing company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T15:28:45.862Z","pid":200568,"hostname":"srv996050","msg":"Starting search for company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T15:28:45.862Z","pid":200568,"hostname":"srv996050","msg":"Stealth delay: 18209ms"}
+{"level":"debug","time":"2025-09-13T15:29:04.108Z","pid":200568,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-13T15:29:08.482Z","pid":200568,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-13T15:29:09.907Z","pid":200568,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"debug","time":"2025-09-13T15:29:44.927Z","pid":200568,"hostname":"srv996050","msg":"Found search input with selector: input[type=\"text\"]:not([style*=\"display: none\"])"}
+{"level":"debug","time":"2025-09-13T15:29:44.927Z","pid":200568,"hostname":"srv996050","msg":"Looking for terms and conditions checkbox..."}
+{"level":"debug","time":"2025-09-13T15:29:44.987Z","pid":200568,"hostname":"srv996050","msg":"Terms checkbox checked, proceeding with search..."}
+{"level":"debug","time":"2025-09-13T15:29:50.647Z","pid":200568,"hostname":"srv996050","msg":"Searching for: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-13T15:29:50.654Z","pid":200568,"hostname":"srv996050","msg":"Submitting with selector: button:has-text(\"Rechercher\")"}
+{"level":"debug","time":"2025-09-13T15:29:50.816Z","pid":200568,"hostname":"srv996050","msg":"Waiting for search results to load..."}
+{"level":"debug","time":"2025-09-13T15:29:56.741Z","pid":200568,"hostname":"srv996050","msg":"No \"Consulter\" buttons found - may be no results or different page structure"}
+{"level":"debug","time":"2025-09-13T15:29:56.741Z","pid":200568,"hostname":"srv996050","msg":"Search completed in 52633ms, found 0 results"}
+{"level":"warn","time":"2025-09-13T15:29:56.744Z","pid":200568,"hostname":"srv996050","msg":"Failed to process PLACEMENTS DVV INC.: No search results found"}
+{"level":"info","time":"2025-09-13T15:29:56.744Z","pid":200568,"hostname":"srv996050","msg":"Processing company: INVESTISSEMENTS OLYMBEC INC."}
+{"level":"debug","time":"2025-09-13T15:29:56.744Z","pid":200568,"hostname":"srv996050","msg":"Starting search for company: INVESTISSEMENTS OLYMBEC INC."}
+{"level":"debug","time":"2025-09-13T15:29:56.744Z","pid":200568,"hostname":"srv996050","msg":"Stealth delay: 17121ms"}
+{"level":"debug","time":"2025-09-13T15:30:13.909Z","pid":200568,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-13T15:30:18.073Z","pid":200568,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-13T15:30:18.710Z","pid":200568,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"error","time":"2025-09-13T15:30:59.748Z","pid":200568,"hostname":"srv996050","type":"failure_artifact","url":"search-INVESTISSEMENTS OLYMBEC INC.","htmlPath":"debug/failures/2025-09-13T15-30-59-search-INVESTISSEMENTS-OLYMBEC-INC-.html","screenshotPath":"2025-09-13T15-30-59-search-INVESTISSEMENTS-OLYMBEC-INC-.png","error":{"error":"Could not find search input field","elapsedMs":45801},"msg":"Failure artifact saved"}
+{"level":"warn","time":"2025-09-13T15:30:59.750Z","pid":200568,"hostname":"srv996050","msg":"Search failed, retrying in 589.5256308278738ms: Could not find search input field"}

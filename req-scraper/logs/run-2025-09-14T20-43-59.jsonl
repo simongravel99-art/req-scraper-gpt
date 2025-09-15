@@ -1,0 +1,26 @@
+{"level":"info","time":"2025-09-14T20:43:59.355Z","pid":214880,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-14T20-43-59.jsonl"}
+{"level":"info","time":"2025-09-14T20:43:59.361Z","pid":214880,"hostname":"srv996050","companiesCsv":"entreprises.csv","nameColumn":"0","limit":1,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-14T20:43:59.362Z","pid":214880,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-14T20:43:59.362Z","pid":214880,"hostname":"srv996050","msg":"Loaded 1 companies from text list"}
+{"level":"info","time":"2025-09-14T20:43:59.363Z","pid":214880,"hostname":"srv996050","msg":"Loaded 1 proxies from proxies.txt"}
+{"level":"debug","time":"2025-09-14T20:43:59.363Z","pid":214880,"hostname":"srv996050","msg":"All options: [\"headless\",\"timeout\",\"rateLimit\",\"pageLoadDelay\",\"formInteractionDelay\",\"maxRetries\",\"debug\",\"logger\",\"requestLayer\"]"}
+{"level":"debug","time":"2025-09-14T20:43:59.363Z","pid":214880,"hostname":"srv996050","msg":"Attempting to load proxy from: undefined"}
+{"level":"debug","time":"2025-09-14T20:43:59.363Z","pid":214880,"hostname":"srv996050","msg":"Proxy result: null"}
+{"level":"debug","time":"2025-09-14T20:43:59.441Z","pid":214880,"hostname":"srv996050","msg":"Initialized browser with viewport: 1920x1080, UA: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Ap..."}
+{"level":"info","time":"2025-09-14T20:43:59.441Z","pid":214880,"hostname":"srv996050","msg":"Processing company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T20:43:59.443Z","pid":214880,"hostname":"srv996050","msg":"Starting search for company: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T20:43:59.443Z","pid":214880,"hostname":"srv996050","msg":"Stealth delay: 16526ms"}
+{"level":"debug","time":"2025-09-14T20:44:16.013Z","pid":214880,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-14T20:44:20.715Z","pid":214880,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-14T20:44:22.209Z","pid":214880,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"debug","time":"2025-09-14T20:44:57.231Z","pid":214880,"hostname":"srv996050","msg":"Found search input with selector: input[type=\"text\"]:not([style*=\"display: none\"])"}
+{"level":"debug","time":"2025-09-14T20:44:57.231Z","pid":214880,"hostname":"srv996050","msg":"Looking for terms and conditions checkbox..."}
+{"level":"debug","time":"2025-09-14T20:44:57.292Z","pid":214880,"hostname":"srv996050","msg":"Terms checkbox checked, proceeding with search..."}
+{"level":"debug","time":"2025-09-14T20:45:02.419Z","pid":214880,"hostname":"srv996050","msg":"Searching for: PLACEMENTS DVV INC."}
+{"level":"debug","time":"2025-09-14T20:45:02.427Z","pid":214880,"hostname":"srv996050","msg":"Submitting with selector: button:has-text(\"Rechercher\")"}
+{"level":"debug","time":"2025-09-14T20:45:02.560Z","pid":214880,"hostname":"srv996050","msg":"Waiting for search results to load..."}
+{"level":"debug","time":"2025-09-14T20:45:09.878Z","pid":214880,"hostname":"srv996050","msg":"No \"Consulter\" buttons found - may be no results or different page structure"}
+{"level":"debug","time":"2025-09-14T20:45:09.878Z","pid":214880,"hostname":"srv996050","msg":"Search completed in 53865ms, found 0 results"}
+{"level":"warn","time":"2025-09-14T20:45:09.879Z","pid":214880,"hostname":"srv996050","msg":"Failed to process PLACEMENTS DVV INC.: No search results found"}
+{"level":"info","time":"2025-09-14T20:45:09.881Z","pid":214880,"hostname":"srv996050","msg":"Wrote 0 results to output/req_results.jsonl"}
+{"level":"info","time":"2025-09-14T20:45:09.910Z","pid":214880,"hostname":"srv996050","type":"summary","duration_ms":70557,"duration_human":"1m 10s","pages":{"attempted":0,"succeeded":0,"failed":0,"success_rate":"0%"},"blocks":{"403":0,"429":0,"5xx":0},"block_rate":"0%","retries":0,"avg_latency_ms":0,"output_rows":0,"ambiguous_matches":0,"msg":"Scraping session summary"}

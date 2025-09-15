@@ -14,7 +14,8 @@ export class REQScraper {
       maxRetries: 3,
       debug: options.debug || false,
       logger: options.logger || console,
-      requestLayer: options.requestLayer
+      requestLayer: options.requestLayer,
+      proxyPoolFile: options.proxyPoolFile
     };
 
     this.browser = null;
@@ -38,11 +39,17 @@ export class REQScraper {
       const lines = content.trim().split('\n').filter(line => line.trim());
 
       if (lines.length === 0) {
+        if (this.options.debug) {
+          this.options.logger.debug(`Proxy file ${proxyFile} is empty`);
+        }
         return null;
       }
 
       // Use the first proxy (could be enhanced to rotate)
       const proxyUrl = lines[0].trim();
+      if (this.options.debug) {
+        this.options.logger.debug(`Loading proxy from ${proxyFile}: ${proxyUrl.replace(/:([^:@]+)@/, ':***@')}`);
+      }
 
       // Parse proxy URL: http://user:pass@host:port
       const url = new URL(proxyUrl);
@@ -73,7 +80,14 @@ export class REQScraper {
     this.sessionCounter++;
 
     // Load proxy if available
+    if (this.options.debug) {
+      this.options.logger.debug(`All options: ${JSON.stringify(Object.keys(this.options))}`);
+      this.options.logger.debug(`Attempting to load proxy from: ${this.options.proxyPoolFile}`);
+    }
     const proxy = await this.loadProxy();
+    if (this.options.debug) {
+      this.options.logger.debug(`Proxy result: ${proxy ? JSON.stringify(proxy) : 'null'}`);
+    }
 
     const launchOptions = {
       headless: this.options.headless,
@@ -260,8 +274,14 @@ export class REQScraper {
         accessButton.click()
       ]);
 
-      // Switch to the new page and wait for it to load
-      await newPage.waitForLoadState('networkidle');
+      // Switch to the new page and wait for it to load with timeout
+      try {
+        await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 });
+        this.options.logger.debug(`New page loaded successfully`);
+      } catch (error) {
+        this.options.logger.debug(`Page load timeout, proceeding anyway: ${error.message}`);
+      }
+
       await page.close(); // Close the old page
 
       // Use the new page for the rest of the process
@@ -306,8 +326,43 @@ export class REQScraper {
 
       // Extended wait for results to load
       this.options.logger.debug(`Waiting for search results to load...`);
-      await page.waitForTimeout(5000 + Math.random() * 3000);
 
+      // First wait a base amount of time
+      await page.waitForTimeout(3000);
+
+      // Then wait for either "Consulter" buttons or "no results" message to appear
+      try {
+        this.options.logger.debug(`Waiting for either results or no-results message...`);
+        await Promise.race([
+          page.waitForSelector('span:has-text("Consulter")', { timeout: 10000 }),
+          page.waitForSelector(':has-text("Aucun résultat")', { timeout: 10000 }),
+          page.waitForSelector(':has-text("aucune entreprise")', { timeout: 10000 }),
+          page.waitForTimeout(10000) // Fallback timeout
+        ]);
+        this.options.logger.debug(`Results page elements detected`);
+      } catch (error) {
+        this.options.logger.debug(`No specific results elements found within timeout, proceeding anyway: ${error.message}`);
+      }
+
+      // Additional wait to ensure results are fully loaded
+      await page.waitForTimeout(2000);
+
+      // DEBUG: Always save the results page HTML for analysis
+      if (this.options.debug) {
+        try {
+          const html = await page.content();
+          const screenshot = await page.screenshot({ type: 'png' });
+          await this.options.logger.saveFailureArtifact(
+            `results-page-${companyName}`,
+            html,
+            screenshot,
+            { note: 'Results page capture for debugging', elapsedMs: Date.now() - startTime }
+          );
+          this.options.logger.debug('Saved results page HTML for analysis');
+        } catch (e) {
+          this.options.logger.debug(`Failed to save results page HTML: ${e.message}`);
+        }
+      }
 
       // Parse results
       const results = await this.parseSearchResults(page);
@@ -343,9 +398,13 @@ export class REQScraper {
   }
 
   async findSearchInput(page) {
-    // Based on the PDF, the REQ portal has specific selectors
+    // Based on the actual REQ portal structure
     const selectors = [
-      // REQ portal specific selectors (from PDF analysis)
+      // Exact selector from the REQ portal
+      '#Objet',
+      'input[name="Objet"]',
+      'input[id="Objet"]',
+      // REQ portal fallback selectors
       'input[name*="entreprise"]',
       'input[name*="Entreprise"]',
       'input[placeholder*="entreprise"]',
@@ -441,10 +500,12 @@ export class REQScraper {
     }
 
     // NEW APPROACH: Find search result rows with "Consulter" buttons
-    // Based on PDF: each company result has a "Consulter" link/button
+    // Based on actual HTML structure: <span aria-hidden="true">Consulter</span>
     const consultButtonSelectors = [
-      'a:has-text("Consulter")',
+      'span:has-text("Consulter")',
+      'span[aria-hidden="true"]:has-text("Consulter")',
       'button:has-text("Consulter")',
+      'a:has-text("Consulter")',
       'input[value="Consulter"]',
       'a[title*="Consulter"]',
       'a:has-text("Voir")',
@@ -454,13 +515,16 @@ export class REQScraper {
     let consultButtons = [];
     for (const selector of consultButtonSelectors) {
       try {
+        this.options.logger.debug(`Trying selector: ${selector}`);
         const buttons = await page.$$(selector);
+        this.options.logger.debug(`Selector ${selector} found ${buttons.length} elements`);
         if (buttons.length > 0) {
-          this.options.logger.debug(`Found ${buttons.length} "Consulter" buttons with selector: ${selector}`);
+          this.options.logger.debug(`SUCCESS: Found ${buttons.length} "Consulter" buttons with selector: ${selector}`);
           consultButtons = buttons;
           break;
         }
       } catch (e) {
+        this.options.logger.debug(`Selector ${selector} failed: ${e.message}`);
         continue;
       }
     }
@@ -474,47 +538,63 @@ export class REQScraper {
     const results = [];
     for (let i = 0; i < consultButtons.length; i++) {
       try {
-        // Find the parent row for this Consulter button
+        // Find the parent container for this Consulter button and look for h4 company name
         const button = consultButtons[i];
-        const row = await button.evaluateHandle(btn => {
-          // Walk up the DOM to find the table row
+
+        // Look for h4 element with company name near this button
+        const parentContainer = await button.evaluateHandle(btn => {
+          // Walk up the DOM to find a container (div, section, article, etc.)
           let element = btn;
-          while (element && element.tagName !== 'TR') {
+          while (element && !['DIV', 'SECTION', 'ARTICLE', 'LI', 'TR'].includes(element.tagName)) {
             element = element.parentElement;
           }
           return element;
         });
 
-        if (row) {
-          // Extract company name and other details from the row
-          const rowText = await row.evaluate(tr => tr.textContent.trim());
-          const cells = await row.$$('td');
+        let companyName = '';
+        let NEQ = '';
+        let rawText = '';
 
-          let companyName = '';
-          let NEQ = '';
-
-          // Extract text from each cell
-          for (const cell of cells) {
-            const cellText = await cell.evaluate(td => td.textContent.trim());
-
-            // Look for NEQ (usually 10 digits)
-            if (/^\d{10}/.test(cellText)) {
-              NEQ = cellText;
-            }
-            // Company name is usually the longest text cell that's not a number
-            else if (cellText.length > companyName.length && !/^\d/.test(cellText) && !cellText.includes('Consulter')) {
-              companyName = cellText;
-            }
+        if (parentContainer) {
+          // Look for h4 element within this container
+          const h4Elements = await parentContainer.$$('h4');
+          if (h4Elements.length > 0) {
+            companyName = await h4Elements[0].evaluate(el => el.textContent.trim());
           }
 
-          results.push({
-            name: companyName || `Company ${i + 1}`,
-            NEQ: NEQ,
-            rawText: rowText,
-            consultButton: button,
-            index: i
+          // Get all text content for backup
+          rawText = await parentContainer.evaluate(el => el.textContent.trim());
+
+          // Look for NEQ (usually 10 digits) in the text
+          const neqMatch = rawText.match(/\d{10}/);
+          if (neqMatch) {
+            NEQ = neqMatch[0];
+          }
+        }
+
+        // Fallback: if no h4 found, try to extract company name from nearby text
+        if (!companyName) {
+          companyName = await button.evaluate(btn => {
+            // Look for text content in siblings or parent elements
+            let element = btn.parentElement;
+            while (element) {
+              const text = element.textContent.trim();
+              if (text && text.length > 10 && !text.includes('Consulter')) {
+                return text.split('\n')[0].trim(); // Take first line
+              }
+              element = element.parentElement;
+            }
+            return '';
           });
         }
+
+        results.push({
+          name: companyName || `Company ${i + 1}`,
+          NEQ: NEQ,
+          rawText: rawText,
+          consultButton: button,
+          index: i
+        });
       } catch (e) {
         this.options.logger.debug(`Error extracting data from result ${i}: ${e.message}`);
         continue;

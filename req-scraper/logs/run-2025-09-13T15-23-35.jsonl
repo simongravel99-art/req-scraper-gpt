@@ -1,0 +1,23 @@
+{"level":"info","time":"2025-09-13T15:23:35.907Z","pid":200261,"hostname":"srv996050","msg":"Debug logging enabled. Log file: logs/run-2025-09-13T15-23-35.jsonl"}
+{"level":"info","time":"2025-09-13T15:23:35.913Z","pid":200261,"hostname":"srv996050","companiesCsv":"test-companies.csv","nameColumn":"0","limit":1,"debug":true,"outputDir":"output","msg":"Starting REQ scraper with options:"}
+{"level":"info","time":"2025-09-13T15:23:35.914Z","pid":200261,"hostname":"srv996050","msg":"Processing as simple text list (no CSV structure detected)"}
+{"level":"info","time":"2025-09-13T15:23:35.914Z","pid":200261,"hostname":"srv996050","msg":"Loaded 1 companies from text list"}
+{"level":"info","time":"2025-09-13T15:23:35.915Z","pid":200261,"hostname":"srv996050","msg":"Loaded 1 proxies from proxies.txt"}
+{"level":"debug","time":"2025-09-13T15:23:35.993Z","pid":200261,"hostname":"srv996050","msg":"Initialized browser with viewport: 1440x900, UA: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb..."}
+{"level":"info","time":"2025-09-13T15:23:35.993Z","pid":200261,"hostname":"srv996050","msg":"Processing company: VILLE DE SHERBROOKE"}
+{"level":"debug","time":"2025-09-13T15:23:35.994Z","pid":200261,"hostname":"srv996050","msg":"Starting search for company: VILLE DE SHERBROOKE"}
+{"level":"debug","time":"2025-09-13T15:23:35.995Z","pid":200261,"hostname":"srv996050","msg":"Stealth delay: 21106ms"}
+{"level":"debug","time":"2025-09-13T15:23:57.146Z","pid":200261,"hostname":"srv996050","msg":"Navigating to Quebec.ca REQ landing page"}
+{"level":"debug","time":"2025-09-13T15:24:01.586Z","pid":200261,"hostname":"srv996050","msg":"Clicking \"Accéder au service\" button..."}
+{"level":"debug","time":"2025-09-13T15:24:03.171Z","pid":200261,"hostname":"srv996050","msg":"Waiting 8000ms for REQ portal to fully load..."}
+{"level":"debug","time":"2025-09-13T15:24:38.197Z","pid":200261,"hostname":"srv996050","msg":"Found search input with selector: input[type=\"text\"]:not([style*=\"display: none\"])"}
+{"level":"debug","time":"2025-09-13T15:24:38.197Z","pid":200261,"hostname":"srv996050","msg":"Looking for terms and conditions checkbox..."}
+{"level":"debug","time":"2025-09-13T15:24:38.266Z","pid":200261,"hostname":"srv996050","msg":"Terms checkbox checked, proceeding with search..."}
+{"level":"debug","time":"2025-09-13T15:24:43.882Z","pid":200261,"hostname":"srv996050","msg":"Searching for: VILLE DE SHERBROOKE"}
+{"level":"debug","time":"2025-09-13T15:24:43.890Z","pid":200261,"hostname":"srv996050","msg":"Submitting with selector: button:has-text(\"Rechercher\")"}
+{"level":"debug","time":"2025-09-13T15:24:43.992Z","pid":200261,"hostname":"srv996050","msg":"Waiting for search results to load..."}
+{"level":"debug","time":"2025-09-13T15:24:49.924Z","pid":200261,"hostname":"srv996050","msg":"No \"Consulter\" buttons found - may be no results or different page structure"}
+{"level":"debug","time":"2025-09-13T15:24:49.924Z","pid":200261,"hostname":"srv996050","msg":"Search completed in 52778ms, found 0 results"}
+{"level":"warn","time":"2025-09-13T15:24:49.926Z","pid":200261,"hostname":"srv996050","msg":"Failed to process VILLE DE SHERBROOKE: No search results found"}
+{"level":"info","time":"2025-09-13T15:24:49.929Z","pid":200261,"hostname":"srv996050","msg":"Wrote 0 results to output/req_results.jsonl"}
+{"level":"info","time":"2025-09-13T15:24:49.957Z","pid":200261,"hostname":"srv996050","type":"summary","duration_ms":74051,"duration_human":"1m 14s","pages":{"attempted":0,"succeeded":0,"failed":0,"success_rate":"0%"},"blocks":{"403":0,"429":0,"5xx":0},"block_rate":"0%","retries":0,"avg_latency_ms":0,"output_rows":0,"ambiguous_matches":0,"msg":"Scraping session summary"}
