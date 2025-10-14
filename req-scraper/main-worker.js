@@ -6,9 +6,9 @@ async function main() {
 
   const runner = await run({
     pgPool: pool,
-    concurrency: 3, // Start with 3 concurrent workers
+    concurrency: 1, // Reduce to 1 worker to avoid rate limiting
     noHandleSignals: false,
-    pollInterval: 5000,
+    pollInterval: 8000, // Longer poll interval for Quebec servers
     taskDirectory: `${import.meta.dirname}/tasks`,
   });
 
